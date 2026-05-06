@@ -179,49 +179,6 @@ NTSTATUS __stdcall D3DKMTOpenAdapterFromGdiDisplayName(void *a){return STATUS_UN
 NTSTATUS __stdcall D3DKMTOpenAdapterFromLuid(void *a){return STATUS_UNSUCCESSFUL;}
 NTSTATUS __stdcall D3DKMTQueryVideoMemoryInfo(void *a){return STATUS_UNSUCCESSFUL;}
 NTSTATUS __stdcall D3DKMTSetVidPnSourceOwner(const void *a){return STATUS_UNSUCCESSFUL;}
-
-/* GetModuleHandleExW — Vista+ kernel32 API. Provide Win98-compatible fallback.
-   wined3d typically calls with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS to get
-   the module handle from an address. Uses VirtualQuery (Win95+) for that case,
-   and GetModuleHandleA (Win95+) with W→A conversion for the name case.
-   Both _GetModuleHandleExW@12 and __imp__GetModuleHandleExW@12 are provided
-   so __declspec(dllimport) callers resolve via our local implementation. */
-typedef unsigned long DWORD;
-typedef unsigned short WCHAR;
-typedef const WCHAR *LPCWSTR;
-typedef void *HMODULE;
-typedef int BOOL;
-#define GET_MODULE_HANDLE_EX_FLAG_PIN 0x1
-#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 0x2
-#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
-HMODULE __stdcall GetModuleHandleA(const char *);
-typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
-DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
-__attribute__((visibility("hidden")))
-BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
-{
-    if(!module) return 0;
-    if(flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
-        MBINFO mbi;
-        if(VirtualQuery((const void *)name, &mbi, sizeof(mbi)))
-            { *module = (HMODULE)mbi.AllocationBase; return 1; }
-        return 0;
-    }
-    if(!name) { *module = (HMODULE)0x400000; return 1; }
-    /* W→A conversion for named lookup */
-    { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
-      *module = GetModuleHandleA(buf); }
-    return *module != 0;
-}
-/* Provide __imp__ pointer for __declspec(dllimport) callers. */
-__asm__("\n"
-    ".globl __imp__GetModuleHandleExW@12\n"
-    ".section .rdata,\"dr\"\n"
-    ".align 4\n"
-    "__imp__GetModuleHandleExW@12:\n"
-    "    .long _GetModuleHandleExW@12\n"
-    ".text\n"
-);
 D3DKMTEOF
     sed -i 's/^C_SRCS\s*=/C_SRCS = d3dkmt_stubs.c /' dlls/wined3d/Makefile.in
 
@@ -261,6 +218,60 @@ strip_kernel32_vista_imports() {
         sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
         echo "    Stripped GetModuleHandleExW from kernel32.spec"
     fi
+}
+
+# ── GetModuleHandleExW Win98 compat stub ────────────────────────────
+# GetModuleHandleExW is Vista+ only. Multiple Wine DLLs (wined3d, ddraw,
+# d3d8, d3d9) use it via __declspec(dllimport). Inject a local stub into
+# each DLL so each resolves its own _imp__ reference without importing
+# from kernel32 (which doesn't have it on Win98). --exclude-symbols
+# prevents the stub from being exported and leaking into import libs.
+create_kernel32_compat() {
+    for dll in wined3d d3d9 d3d8 ddraw; do
+        local mf="dlls/$dll/Makefile.in"
+        [ -f "$mf" ] || continue
+        cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
+/* GetModuleHandleExW — Vista+ kernel32 API. Win98-compatible fallback.
+   Uses VirtualQuery (Win95+) for FROM_ADDRESS, GetModuleHandleA (Win95+)
+   for named lookup. Both function and __imp__ pointer provided. */
+typedef unsigned long DWORD;
+typedef unsigned short WCHAR;
+typedef const WCHAR *LPCWSTR;
+typedef void *HMODULE;
+typedef int BOOL;
+#ifndef __stdcall
+#define __stdcall __attribute__((stdcall))
+#endif
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
+HMODULE __stdcall GetModuleHandleA(const char *);
+typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
+DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
+BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
+{
+    if(!module) return 0;
+    if(flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
+        MBINFO mbi;
+        if(VirtualQuery((const void *)name, &mbi, sizeof(mbi)))
+            { *module = (HMODULE)mbi.AllocationBase; return 1; }
+        return 0;
+    }
+    if(!name) { *module = (HMODULE)0x400000; return 1; }
+    { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
+      *module = GetModuleHandleA(buf); }
+    return *module != 0;
+}
+__asm__("\n"
+    ".globl __imp__GetModuleHandleExW@12\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp__GetModuleHandleExW@12:\n"
+    "    .long _GetModuleHandleExW@12\n"
+    ".text\n"
+);
+K32EOF
+        sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "$mf"
+    done
+    echo "    Injected GetModuleHandleExW compat stub into all DLLs"
 }
 
 # VidMem/HAL export stubs for the qemu-3dfx passthrough layer.
@@ -349,6 +360,9 @@ build_modern() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # Inject GetModuleHandleExW Win98 compat into all DLLs
+    create_kernel32_compat
 
     # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
     strip_kernel32_vista_imports
@@ -441,6 +455,9 @@ build_legacy() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # Inject GetModuleHandleExW Win98 compat into all DLLs
+    create_kernel32_compat
 
     # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
     strip_kernel32_vista_imports
