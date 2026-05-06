@@ -445,21 +445,17 @@ for arg in "\$@"; do
 done
 if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
-    # Strip any inline wine-stubs.a from args — we'll append it at the end
-    # to guarantee it comes after all .o files (linker processes archives
-    # left-to-right, so symbols from .o files must be unresolved first).
+    # Belt-and-suspenders: force static linking for any remaining -lwine
+    # references that may have been injected by winebuild/winegcc internals.
     new_args=()
     for a in "\${args[@]}"; do
-        case "\$a" in
-            *wine-stubs.a*) ;;   # skip — re-added below
-            *libwine*) ;;        # skip any remaining libwine reference
-            -lwine) ;;           # skip
-            *) new_args+=("\$a") ;;
-        esac
+        if [ "\$a" = "-lwine" ]; then
+            new_args+=(-Wl,-Bstatic "\$STUB" -Wl,-Bdynamic)
+        else
+            new_args+=("\$a")
+        fi
     done
     args=("\${new_args[@]}")
-    # Append stub at the very end so all unresolved symbols get resolved.
-    args+=("\$STUB")
 fi
 exec "\$SELFDIR/winegcc.exe" "\${args[@]}"
 WGEOF

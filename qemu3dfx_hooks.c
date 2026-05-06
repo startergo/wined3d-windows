@@ -14,13 +14,14 @@
 #include <windows.h>
 
 /* Wine debug channel — embeds "QEMU" string matching original qemu-3dfx DLLs.
-   wine_dbg_log is provided by the stub libwine linked at the end of the
-   link command (after all .o files) so all symbols resolve correctly. */
+   wine_dbg_log is provided locally as a static no-op to avoid link-order
+   dependency on the stub libwine archive across different Wine versions. */
 struct __wine_debug_channel { unsigned char flags; unsigned char name[15]; };
 enum __wine_debug_class { __WINE_DBCL_FIXME, __WINE_DBCL_ERR, __WINE_DBCL_WARN, __WINE_DBCL_TRACE };
-extern int wine_dbg_log(enum __wine_debug_class, struct __wine_debug_channel *, const char *, const char *, ...);
 
-static struct __wine_debug_channel __qemu3dfx_dbch = { 0, {'Q','U','E','M','U'} };
+static struct __wine_debug_channel __qemu3dfx_dbch __attribute__((used)) = { 0, {'Q','U','E','M','U'} };
+static int wine_dbg_log(enum __wine_debug_class c, struct __wine_debug_channel *ch,
+                         const char *fn, const char *fmt, ...) { return 0; }
 #define QEMU_DBG(cls, ...) wine_dbg_log(cls, &__qemu3dfx_dbch, __FUNCTION__, __VA_ARGS__)
 
 /* Globals shared across hooks */
