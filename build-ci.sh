@@ -197,6 +197,7 @@ typedef int BOOL;
 HMODULE __stdcall GetModuleHandleA(const char *);
 typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
 DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
+__attribute__((visibility("hidden")))
 BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
 {
     if(!module) return 0;
@@ -213,13 +214,15 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
     return *module != 0;
 }
 /* Provide __imp__ pointer for __declspec(dllimport) callers.
-   Without this, the linker expects an import thunk from kernel32.dll. */
+   Exclude from DLL exports so it doesn't leak to import libs (ddraw etc.). */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp__GetModuleHandleExW@12:\n"
     "    .long _GetModuleHandleExW@12\n"
+    ".section .drectve\n"
+    ".ascii \" -exclude-symbols:_GetModuleHandleExW@12,__imp__GetModuleHandleExW@12\"\n"
     ".text\n"
 );
 D3DKMTEOF

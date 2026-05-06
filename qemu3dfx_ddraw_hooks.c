@@ -59,6 +59,7 @@ long WINAPI InternalLock(void *lpDDSurface, void **ppBits, void *lpRect, DWORD d
    DDK: HRESULT InternalUnlock(lpDDSurface, lpSurfaceData, dwFlags) */
 long WINAPI InternalUnlock(void *lpDDSurface, void *lpSurfaceData, DWORD dwFlags)
 {
+    return 0;
 }
 
 /* Late surface memory allocation.
