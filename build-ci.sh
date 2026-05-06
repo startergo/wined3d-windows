@@ -204,7 +204,7 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
             { *module = (HMODULE)mbi.AllocationBase; return 1; }
         return 0;
     }
-    if(!name) { *module = (HMODULE)(size_t)0x400000; return 1; }
+    if(!name) { *module = (HMODULE)0x400000; return 1; }
     /* W→A conversion for named lookup */
     { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
       *module = GetModuleHandleA(buf); }
@@ -727,16 +727,19 @@ generate_import_libs() {
         mkdir -p "$tmpdir"
         local curdir="$(pwd)"
         cd "$tmpdir"
-        ar x "$k32"
-        for obj in *.o; do
-            objcopy --strip-symbol _GetModuleHandleExW@12 \
-                    --strip-symbol __imp__GetModuleHandleExW@12 \
-                    "$obj" 2>/dev/null || true
-        done
-        ar cr "$k32" *.o
+        ar x "$k32" 2>/dev/null || true
+        local objcount=$(ls -1 *.o 2>/dev/null | wc -l)
+        if [ "$objcount" -gt 0 ]; then
+            for obj in *.o; do
+                objcopy --strip-symbol _GetModuleHandleExW@12 \
+                        --strip-symbol __imp__GetModuleHandleExW@12 \
+                        "$obj" 2>/dev/null || true
+            done
+            ar cr "$k32" *.o
+            echo "    Stripped GetModuleHandleExW from libkernel32.a (Vista+ API → local stub)"
+        fi
         rm -rf "$tmpdir"
         cd "$curdir"
-        echo "    Stripped GetModuleHandleExW from libkernel32.a (Vista+ API → local stub)"
     fi
 }
 

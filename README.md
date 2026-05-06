@@ -19,8 +19,8 @@ dependency:
 | `ddraw.dll` | DirectDraw + VidMem HAL stubs |
 | `msvcrt.dll` | C runtime (Wine 6.0.4 only) |
 
-All DLLs target Windows XP/2000+ compatibility (D3DKMT Vista+ imports are
-stubbed out).
+All DLLs target Windows 98 SE compatibility (D3DKMT Vista+ imports and
+`GetModuleHandleExW` are stubbed out with Win98-compatible fallbacks).
 
 ## Supported Wine Versions
 
