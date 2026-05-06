@@ -253,38 +253,14 @@ SPECEOF
 # ── qemu-3dfx ddraw HAL stubs ────────────────────────────────────────
 # ── Strip GetModuleHandleExW from kernel32 ──────────────────────────
 # GetModuleHandleExW is Vista+ only. wined3d uses it via __declspec(dllimport).
-# Our d3dkmt_stubs.c provides a Win98-compatible stub. Prevent the real
-# import from appearing in any kernel32 import lib and exclude our stub
-# from DLL exports via linker flag.
+# Our d3dkmt_stubs.c provides a Win98-compatible stub. The --exclude-symbols
+# linker flag prevents the stub from being exported. We also strip from
+# kernel32.spec so Wine never generates import thunks for it.
 strip_kernel32_vista_imports() {
-    # Remove from kernel32.spec so Wine's build system never generates
-    # import lib thunks for it.
     if [ -f dlls/kernel32/kernel32.spec ]; then
         sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
         echo "    Stripped GetModuleHandleExW from kernel32.spec"
     fi
-    # Also strip from system MinGW kernel32 import libs
-    for k32 in /mingw32/lib/libkernel32.a \
-               /mingw32/i686-w64-mingw32/lib/libkernel32.a; do
-        [ -f "$k32" ] || continue
-        local tmpdir="${TMPDIR:-/tmp}/k32_strip_$$_$(date +%s)"
-        mkdir -p "$tmpdir"
-        local curdir="$(pwd)"
-        cd "$tmpdir"
-        ar x "$k32" 2>/dev/null || true
-        local objcount=$(ls -1 *.o 2>/dev/null | wc -l)
-        if [ "$objcount" -gt 0 ]; then
-            for obj in *.o; do
-                objcopy --strip-symbol _GetModuleHandleExW@12 \
-                        --strip-symbol __imp__GetModuleHandleExW@12 \
-                        "$obj" 2>/dev/null || true
-            done
-            ar cr "$k32" *.o
-        fi
-        rm -rf "$tmpdir"
-        cd "$curdir"
-    done
-    echo "    Stripped GetModuleHandleExW from kernel32 import libs"
 }
 
 # VidMem/HAL export stubs for the qemu-3dfx passthrough layer.
