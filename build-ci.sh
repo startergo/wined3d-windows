@@ -214,44 +214,53 @@ SPECEOF
 # linker flag prevents the stub from being exported. We also strip from
 # kernel32.spec so Wine never generates import thunks for it.
 strip_kernel32_vista_imports() {
-    # Remove from Wine's kernel32.spec so it never generates import thunks
-    if [ -f dlls/kernel32/kernel32.spec ]; then
-        sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
-        echo "    Stripped GetModuleHandleExW from kernel32.spec"
-    fi
-    # Strip from system MinGW kernel32 import libs.
-    # Use objcopy directly on the archive (processes members individually,
-    # avoids ARG_MAX from extracting all objects and ar cr *.o).
-    for k32 in /mingw32/lib/libkernel32.a \
-               /mingw32/i686-w64-mingw32/lib/libkernel32.a; do
-        [ -f "$k32" ] || continue
-        local tmp="${TMPDIR:-/tmp}/k32_$$_$(date +%s).a"
-        if objcopy --strip-symbol _GetModuleHandleExW@12 \
-                   --strip-symbol __imp__GetModuleHandleExW@12 \
-                   "$k32" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
-            mv "$tmp" "$k32"
-            echo "    Stripped GetModuleHandleExW from $k32"
+    # Remove Vista+/Win2000+ APIs from spec files so Wine never generates
+    # import thunks for them. Our kernel32_compat.c provides local stubs.
+    for spec in dlls/kernel32/kernel32.spec dlls/ntdll/ntdll.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/GetModuleHandleExW/d' \
+               -e '/GlobalMemoryStatusEx/d' \
+               -e '/RtlIsCriticalSectionLockedByThread/d' \
+               "$spec"
+    done
+    echo "    Stripped Vista+ APIs from kernel32/ntdll specs"
+
+    # Strip from system MinGW import libs (objcopy on archive, no ARG_MAX)
+    for lib in /mingw32/lib/libkernel32.a \
+               /mingw32/i686-w64-mingw32/lib/libkernel32.a \
+               /mingw32/lib/libntdll.a \
+               /mingw32/i686-w64-mingw32/lib/libntdll.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_$$_$(date +%s).a"
+        if objcopy \
+               --strip-symbol _GetModuleHandleExW@12 \
+               --strip-symbol __imp__GetModuleHandleExW@12 \
+               --strip-symbol _GlobalMemoryStatusEx@4 \
+               --strip-symbol __imp__GlobalMemoryStatusEx@4 \
+               --strip-symbol _RtlIsCriticalSectionLockedByThread@4 \
+               --strip-symbol __imp__RtlIsCriticalSectionLockedByThread@4 \
+               "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped Vista+ symbols from $lib"
         else
             rm -f "$tmp"
         fi
     done
 }
 
-# ── GetModuleHandleExW Win98 compat stub ────────────────────────────
-# GetModuleHandleExW is Vista+ only. Multiple Wine DLLs (wined3d, ddraw,
-# d3d8, d3d9) use it via __declspec(dllimport). Inject a local stub into
-# each DLL so each resolves its own _imp__ reference without importing
-# from kernel32 (which doesn't have it on Win98). --exclude-symbols
-# prevents the stub from being exported and leaking into import libs.
+# ── Win98 compat stubs for Vista+/Win2000+ APIs ────────────────────
+# Multiple Wine DLLs use Vista+/Win2000+ APIs via __declspec(dllimport).
+# Inject local stubs into each DLL so each resolves its own _imp__
+# references without importing from system DLLs that lack them on Win98.
 create_kernel32_compat() {
     for dll in wined3d d3d9 d3d8 ddraw; do
         local mf="dlls/$dll/Makefile.in"
         [ -f "$mf" ] || continue
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
-/* GetModuleHandleExW — Vista+ kernel32 API. Win98-compatible fallback.
-   Uses VirtualQuery (Win95+) for FROM_ADDRESS, GetModuleHandleA (Win95+)
-   for named lookup. Both function and __imp__ pointer provided. */
+/* Win98-compatible stubs for Vista+/Win2000+ kernel32/ntdll APIs.
+   Each provides the function + __imp__ pointer for __declspec(dllimport). */
 typedef unsigned long DWORD;
+typedef unsigned long long DWORD64;
 typedef unsigned short WCHAR;
 typedef const WCHAR *LPCWSTR;
 typedef void *HMODULE;
@@ -259,6 +268,9 @@ typedef int BOOL;
 #ifndef __stdcall
 #define __stdcall __attribute__((stdcall))
 #endif
+
+/* --- GetModuleHandleExW (Vista+) ---
+   Uses VirtualQuery (Win95+) for FROM_ADDRESS, GetModuleHandleA for name. */
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
 HMODULE __stdcall GetModuleHandleA(const char *);
 typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
@@ -277,18 +289,48 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
       *module = GetModuleHandleA(buf); }
     return *module != 0;
 }
+
+/* --- GlobalMemoryStatusEx (Win2000+) ---
+   Falls back to GlobalMemoryStatus (Win95+). */
+typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD dwTotalPhys; DWORD dwAvailPhys;
+  DWORD dwTotalPageFile; DWORD dwAvailPageFile; DWORD dwTotalVirtual; DWORD dwAvailVirtual; } MEMSTATUS;
+typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD64 ullTotalPhys; DWORD64 ullAvailPhys;
+  DWORD64 ullTotalPageFile; DWORD64 ullAvailPageFile; DWORD64 ullTotalVirtual; DWORD64 ullAvailVirtual;
+  DWORD64 ullAvailExtendedVirtual; } MEMSTATUSEX;
+void __stdcall GlobalMemoryStatus(MEMSTATUS *);
+BOOL __stdcall GlobalMemoryStatusEx(MEMSTATUSEX *lpBuffer)
+{
+    MEMSTATUS ms; ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    lpBuffer->dwLength = sizeof(*lpBuffer);
+    lpBuffer->dwMemoryLoad = ms.dwMemoryLoad;
+    lpBuffer->ullTotalPhys = ms.dwTotalPhys;
+    lpBuffer->ullAvailPhys = ms.dwAvailPhys;
+    lpBuffer->ullTotalPageFile = ms.dwTotalPageFile;
+    lpBuffer->ullAvailPageFile = ms.dwAvailPageFile;
+    lpBuffer->ullTotalVirtual = ms.dwTotalVirtual;
+    lpBuffer->ullAvailVirtual = ms.dwAvailVirtual;
+    lpBuffer->ullAvailExtendedVirtual = 0;
+    return 1;
+}
+
+/* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp__GetModuleHandleExW@12:\n"
     "    .long _GetModuleHandleExW@12\n"
+    ".globl __imp__GlobalMemoryStatusEx@4\n"
+    ".align 4\n"
+    "__imp__GlobalMemoryStatusEx@4:\n"
+    "    .long _GlobalMemoryStatusEx@4\n"
     ".text\n"
 );
 K32EOF
         sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "$mf"
     done
-    echo "    Injected GetModuleHandleExW compat stub into all DLLs"
+    echo "    Injected Win98 compat stubs into all DLLs"
 }
 
 # VidMem/HAL export stubs for the qemu-3dfx passthrough layer.
@@ -395,9 +437,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -542,7 +584,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
