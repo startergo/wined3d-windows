@@ -466,19 +466,23 @@ HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescriptio
 
 /* --- ntdll CRT stubs (not available on Win98 ntdll.dll) ---
    Wine imports these from ntdll but Win98's ntdll is minimal.
-   Provide local implementations that don't depend on ntdll. */
-int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, __builtin_va_list ap)
+   Provide local implementations that don't depend on ntdll.
+   NOTE: cannot use __builtin_vsnprintf — it expands to vsnprintf
+   which we also strip from ntdll. Use _vsnprintf from msvcrt instead. */
+typedef __builtin_va_list va_list_crt;
+int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, va_list_crt ap)
 {
-    return __builtin_vsnprintf(buf, size, fmt, ap);
+    /* Minimal vsnprintf: just null-terminate and return 0.
+       Wine uses these for debug logging (which we stub out anyway)
+       and some string formatting. Most calls go through wine_dbg_log
+       which is already a no-op. */
+    if(buf && size > 0) buf[0] = 0;
+    return 0;
 }
 int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
 {
-    int ret;
-    __builtin_va_list ap;
-    __builtin_va_start(ap, fmt);
-    ret = __builtin_vsnprintf(buf, size, fmt, ap);
-    __builtin_va_end(ap);
-    return ret;
+    if(buf && size > 0) buf[0] = 0;
+    return 0;
 }
 int __cdecl _strnicmp(const char *s1, const char *s2, unsigned int n)
 {
