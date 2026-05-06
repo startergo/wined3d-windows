@@ -214,10 +214,27 @@ SPECEOF
 # linker flag prevents the stub from being exported. We also strip from
 # kernel32.spec so Wine never generates import thunks for it.
 strip_kernel32_vista_imports() {
+    # Remove from Wine's kernel32.spec so it never generates import thunks
     if [ -f dlls/kernel32/kernel32.spec ]; then
         sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
         echo "    Stripped GetModuleHandleExW from kernel32.spec"
     fi
+    # Strip from system MinGW kernel32 import libs.
+    # Use objcopy directly on the archive (processes members individually,
+    # avoids ARG_MAX from extracting all objects and ar cr *.o).
+    for k32 in /mingw32/lib/libkernel32.a \
+               /mingw32/i686-w64-mingw32/lib/libkernel32.a; do
+        [ -f "$k32" ] || continue
+        local tmp="${TMPDIR:-/tmp}/k32_$$_$(date +%s).a"
+        if objcopy --strip-symbol _GetModuleHandleExW@12 \
+                   --strip-symbol __imp__GetModuleHandleExW@12 \
+                   "$k32" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$k32"
+            echo "    Stripped GetModuleHandleExW from $k32"
+        else
+            rm -f "$tmp"
+        fi
+    done
 }
 
 # ── GetModuleHandleExW Win98 compat stub ────────────────────────────
