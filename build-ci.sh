@@ -352,7 +352,9 @@ strip_kernel32_vista_imports_wine() {
                sprintf vsprintf snprintf vsnprintf sscanf \
                memcpy memset memmove memcmp \
                strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
-               tolower toupper atoi atol strtol qsort bsearch; do
+               tolower toupper atoi atol strtol qsort bsearch \
+               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct abs \
+               __acrt_iob_func; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -360,7 +362,11 @@ strip_kernel32_vista_imports_wine() {
         dlls/kernel32/i386-windows/libkernel32.a \
         dlls/kernel32/libkernel32.a \
         dlls/ntdll/i386-windows/libntdll.a \
-        dlls/ntdll/libntdll.a; do
+        dlls/ntdll/libntdll.a \
+        dlls/ucrtbase/i386-windows/libucrtbase.a \
+        dlls/ucrtbase/libucrtbase.a \
+        dlls/msvcrt/i386-windows/libmsvcrt.a \
+        dlls/msvcrt/libmsvcrt.a; do
         [ -f "$lib" ] || continue
         local tmp="${TMPDIR:-/tmp}/strip_wine_$$_$(date +%s).a"
         if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
@@ -522,9 +528,9 @@ int __cdecl isgraph(int c) { return c > 32 && c < 127; }
 int __cdecl ispunct(int c) { return isgraph(c) && !isalnum(c); }
 
 /* --- __acrt_iob_func (UCRT, not in Win98 msvcrt.dll) ---
-   Redirects to __iob_func (available in all msvcrt versions). */
-void * __cdecl __iob_func(void);
-void * __cdecl __acrt_iob_func(unsigned int i) { return (char *)__iob_func() + i * 32; }
+   Returns a dummy FILE slot — debug output is suppressed anyway. */
+static char _dummy_iob[96];
+void * __cdecl __acrt_iob_func(unsigned int i) { return (i < 3) ? _dummy_iob + i * 32 : 0; }
 
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
