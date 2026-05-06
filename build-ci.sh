@@ -238,6 +238,8 @@ strip_kernel32_vista_imports() {
                -e '/SleepConditionVariableCS/d' \
                -e '/SleepConditionVariableSRW/d' \
                -e '/GetTickCount64/d' \
+               -e '/_snprintf/d' \
+               -e '/_strnicmp/d' \
                "$spec"
     done
     echo "    Stripped Vista+ APIs from kernel32/ntdll specs"
@@ -259,6 +261,10 @@ strip_kernel32_vista_imports() {
         GetTickCount64@0; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
+    # ntdll CRT stubs (cdecl, no @N suffix)
+    for api in _snprintf _strnicmp; do
+        strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
 
     for lib in /mingw32/lib/libkernel32.a \
                /mingw32/i686-w64-mingw32/lib/libkernel32.a \
@@ -269,6 +275,48 @@ strip_kernel32_vista_imports() {
         if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
             echo "    Stripped Vista+ symbols from $lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
+}
+
+# Strip Vista+ symbols from Wine's OWN import libs (built by make tools).
+# Wine 8 modern PE build generates dlls/kernel32/i386-windows/libkernel32.a
+# and dlls/ntdll/i386-windows/libntdll.a from the built DLLs. These contain
+# Vista+ exports that our kernel32_compat.c stubs. Must strip AFTER make tools
+# builds them but BEFORE our DLLs are linked.
+strip_kernel32_vista_imports_wine() {
+    local strip_syms=()
+    for api in \
+        GetModuleHandleExW@12 GlobalMemoryStatusEx@4 \
+        RtlIsCriticalSectionLockedByThread@4 \
+        InitOnceExecuteOnce@16 \
+        InitOnceBeginInitialize@16 InitOnceComplete@12 InitOnceInitialize@4 \
+        InitializeSRWLock@4 \
+        AcquireSRWLockExclusive@4 AcquireSRWLockShared@4 \
+        ReleaseSRWLockExclusive@4 ReleaseSRWLockShared@4 \
+        TryAcquireSRWLockExclusive@4 TryAcquireSRWLockShared@4 \
+        InitializeConditionVariable@4 \
+        WakeConditionVariable@4 WakeAllConditionVariable@4 \
+        SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
+        GetTickCount64@0; do
+        strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
+    for api in _snprintf _strnicmp; do
+        strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
+
+    for lib in \
+        dlls/kernel32/i386-windows/libkernel32.a \
+        dlls/kernel32/libkernel32.a \
+        dlls/ntdll/i386-windows/libntdll.a \
+        dlls/ntdll/libntdll.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_wine_$$_$(date +%s).a"
+        if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped Vista+ symbols from Wine $lib"
         else
             rm -f "$tmp"
         fi
@@ -368,6 +416,32 @@ void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv) { }
 void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv) { }
 unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC *cs, unsigned long ms) { return 0; }
 
+/* --- ntdll CRT stubs (not available on Win98 ntdll.dll) ---
+   Wine imports these from ntdll but Win98's ntdll is minimal.
+   Provide local implementations that don't depend on ntdll. */
+int __cdecl _vsnprintf(char *, unsigned int, const char *, __builtin_va_list);
+int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
+{
+    int ret;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    ret = _vsnprintf(buf, size, fmt, ap);
+    __builtin_va_end(ap);
+    return ret;
+}
+int __cdecl _strnicmp(const char *s1, const char *s2, unsigned int n)
+{
+    if(!n) return 0;
+    for(; n--; s1++, s2++) {
+        unsigned char c1 = (unsigned char)*s1, c2 = (unsigned char)*s2;
+        if(c1 >= 'A' && c1 <= 'Z') c1 += 32;
+        if(c2 >= 'A' && c2 <= 'Z') c2 += 32;
+        if(c1 != c2) return (int)c1 - (int)c2;
+        if(!c1) return 0;
+    }
+    return 0;
+}
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
@@ -403,6 +477,14 @@ __asm__("\n"
     ".align 4\n"
     "__imp__SleepConditionVariableCS@12:\n"
     "    .long _SleepConditionVariableCS@12\n"
+    ".globl __imp___snprintf\n"
+    ".align 4\n"
+    "__imp___snprintf:\n"
+    "    .long __snprintf\n"
+    ".globl __imp___strnicmp\n"
+    ".align 4\n"
+    "__imp___strnicmp:\n"
+    "    .long __strnicmp\n"
     ".text\n"
 );
 K32EOF
@@ -515,9 +597,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -545,6 +627,12 @@ build_modern() {
     export PATH="/mingw32/bin:$PATH"
     make -j"$NPROC" tools
     export PATH="$(pwd)/tools/winebuild:$PATH"
+
+    # Wine's own import libs (built by make tools) contain Vista+ symbols
+    # that our kernel32_compat.c stubs. Strip them so the linker uses our
+    # local __imp__ pointers instead of generating PE import table entries.
+    echo "    Stripping Vista+ symbols from Wine-built import libs..."
+    strip_kernel32_vista_imports_wine
 
     local targets=(
         dlls/wined3d/i386-windows/wined3d.dll
@@ -662,7 +750,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
