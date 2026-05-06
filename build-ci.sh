@@ -221,25 +221,52 @@ strip_kernel32_vista_imports() {
         sed -i -e '/GetModuleHandleExW/d' \
                -e '/GlobalMemoryStatusEx/d' \
                -e '/RtlIsCriticalSectionLockedByThread/d' \
+               -e '/InitOnceBeginInitialize/d' \
+               -e '/InitOnceComplete/d' \
+               -e '/InitOnceExecuteOnce/d' \
+               -e '/InitOnceInitialize/d' \
+               -e '/InitializeSRWLock/d' \
+               -e '/AcquireSRWLockExclusive/d' \
+               -e '/AcquireSRWLockShared/d' \
+               -e '/ReleaseSRWLockExclusive/d' \
+               -e '/ReleaseSRWLockShared/d' \
+               -e '/TryAcquireSRWLockExclusive/d' \
+               -e '/TryAcquireSRWLockShared/d' \
+               -e '/InitializeConditionVariable/d' \
+               -e '/WakeConditionVariable/d' \
+               -e '/WakeAllConditionVariable/d' \
+               -e '/SleepConditionVariableCS/d' \
+               -e '/SleepConditionVariableSRW/d' \
+               -e '/GetTickCount64/d' \
                "$spec"
     done
     echo "    Stripped Vista+ APIs from kernel32/ntdll specs"
 
     # Strip from system MinGW import libs (objcopy on archive, no ARG_MAX)
+    local strip_syms=()
+    for api in \
+        GetModuleHandleExW@12 GlobalMemoryStatusEx@4 \
+        RtlIsCriticalSectionLockedByThread@4 \
+        InitOnceExecuteOnce@16 \
+        InitOnceBeginInitialize@16 InitOnceComplete@12 InitOnceInitialize@4 \
+        InitializeSRWLock@4 \
+        AcquireSRWLockExclusive@4 AcquireSRWLockShared@4 \
+        ReleaseSRWLockExclusive@4 ReleaseSRWLockShared@4 \
+        TryAcquireSRWLockExclusive@4 TryAcquireSRWLockShared@4 \
+        InitializeConditionVariable@4 \
+        WakeConditionVariable@4 WakeAllConditionVariable@4 \
+        SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
+        GetTickCount64@0; do
+        strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
+
     for lib in /mingw32/lib/libkernel32.a \
                /mingw32/i686-w64-mingw32/lib/libkernel32.a \
                /mingw32/lib/libntdll.a \
                /mingw32/i686-w64-mingw32/lib/libntdll.a; do
         [ -f "$lib" ] || continue
         local tmp="${TMPDIR:-/tmp}/strip_$$_$(date +%s).a"
-        if objcopy \
-               --strip-symbol _GetModuleHandleExW@12 \
-               --strip-symbol __imp__GetModuleHandleExW@12 \
-               --strip-symbol _GlobalMemoryStatusEx@4 \
-               --strip-symbol __imp__GlobalMemoryStatusEx@4 \
-               --strip-symbol _RtlIsCriticalSectionLockedByThread@4 \
-               --strip-symbol __imp__RtlIsCriticalSectionLockedByThread@4 \
-               "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+        if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
             echo "    Stripped Vista+ symbols from $lib"
         else
@@ -324,6 +351,15 @@ BOOL __stdcall RtlIsCriticalSectionLockedByThread(CRITSEC *cs)
     return cs && cs->OwningThread == (void *)(ULONG_PTR)GetCurrentThreadId() && cs->RecursionCount > 0;
 }
 
+/* --- InitOnceExecuteOnce (Vista+) ---
+   One-time initialization. Just call the init function immediately. */
+typedef long BOOL_CALL_ONCE(void *, void **);
+BOOL __stdcall InitOnceExecuteOnce(void *init_once, BOOL_CALL_ONCE *init_fn, void *param, void **context)
+{
+    if(init_fn) return init_fn(param, context ? context : (void **)init_once);
+    return 1;
+}
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
@@ -339,6 +375,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__RtlIsCriticalSectionLockedByThread@4:\n"
     "    .long _RtlIsCriticalSectionLockedByThread@4\n"
+    ".globl __imp__InitOnceExecuteOnce@16\n"
+    ".align 4\n"
+    "__imp__InitOnceExecuteOnce@16:\n"
+    "    .long _InitOnceExecuteOnce@16\n"
     ".text\n"
 );
 K32EOF
@@ -451,9 +491,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -598,7 +638,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
