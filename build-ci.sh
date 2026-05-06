@@ -240,9 +240,48 @@ strip_kernel32_vista_imports() {
                -e '/GetTickCount64/d' \
                -e '/_snprintf/d' \
                -e '/_strnicmp/d' \
+               -e '/_vsnprintf/d' \
+	               "$spec"
+    done
+    # Also strip ntdll CRT functions (available from msvcrt on Win98).
+    # ntdll-only strip — kernel32 doesn't have these.
+    for spec in dlls/ntdll/ntdll.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/_stricmp/d' \
+               -e '/^@.*\bsprintf\b/d' \
+               -e '/^@.*\bvsprintf\b/d' \
+               -e '/^@.*\bvsnprintf\b/d' \
+               -e '/^@.*\bsnprintf\b/d' \
+               -e '/^@.*\bsscanf/d' \
+               -e '/^@.*\bmemcpy\b/d' \
+               -e '/^@.*\bmemset\b/d' \
+               -e '/^@.*\bmemmove\b/d' \
+               -e '/^@.*\bmemcmp\b/d' \
+               -e '/^@.*\bstrlen\b/d' \
+               -e '/^@.*\bstrcpy\b/d' \
+               -e '/^@.*\bstrcat\b/d' \
+               -e '/^@.*\bstrcmp\b/d' \
+               -e '/^@.*\bstrncmp\b/d' \
+               -e '/^@.*\bstrchr\b/d' \
+               -e '/^@.*\bstrstr\b/d' \
+               -e '/^@.*\bstrrchr\b/d' \
+               -e '/^@.*\btolower\b/d' \
+               -e '/^@.*\btoupper\b/d' \
+               -e '/^@.*\batoi\b/d' \
+               -e '/^@.*\batol\b/d' \
+               -e '/^@.*\bstrtol\b/d' \
+               -e '/^@.*\bqsort\b/d' \
+               -e '/^@.*\bbsearch\b/d' \
                "$spec"
     done
-    echo "    Stripped Vista+ APIs from kernel32/ntdll specs"
+    echo "    Stripped Vista+ APIs and CRT from kernel32/ntdll specs"
+
+    # Strip SetThreadDescription from kernel32.spec (Windows 10+)
+    for spec in dlls/kernel32/kernel32.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/SetThreadDescription/d' "$spec"
+    done
+    echo "    Stripped Vista+ APIs and CRT from kernel32/ntdll specs"
 
     # Strip from system MinGW import libs (objcopy on archive, no ARG_MAX)
     local strip_syms=()
@@ -258,11 +297,12 @@ strip_kernel32_vista_imports() {
         InitializeConditionVariable@4 \
         WakeConditionVariable@4 WakeAllConditionVariable@4 \
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
-        GetTickCount64@0; do
+        GetTickCount64@0 \
+        SetThreadDescription@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # ntdll CRT stubs (cdecl, no @N suffix)
-    for api in _snprintf _strnicmp; do
+    for api in _snprintf _strnicmp _vsnprintf; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -300,10 +340,11 @@ strip_kernel32_vista_imports_wine() {
         InitializeConditionVariable@4 \
         WakeConditionVariable@4 WakeAllConditionVariable@4 \
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
-        GetTickCount64@0; do
+        GetTickCount64@0 \
+        SetThreadDescription@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    for api in _snprintf _strnicmp; do
+    for api in _snprintf _strnicmp _vsnprintf; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -416,16 +457,26 @@ void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv) { }
 void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv) { }
 unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC *cs, unsigned long ms) { return 0; }
 
+/* --- SetThreadDescription (Windows 10+) ---
+   Sets a descriptive string for a thread. No-op on Win98. */
+typedef long HRESULT;
+typedef void *HANDLE;
+typedef const unsigned short *PCWSTR;
+HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescription) { return 0; }
+
 /* --- ntdll CRT stubs (not available on Win98 ntdll.dll) ---
    Wine imports these from ntdll but Win98's ntdll is minimal.
    Provide local implementations that don't depend on ntdll. */
-int __cdecl _vsnprintf(char *, unsigned int, const char *, __builtin_va_list);
+int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, __builtin_va_list ap)
+{
+    return __builtin_vsnprintf(buf, size, fmt, ap);
+}
 int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
 {
     int ret;
     __builtin_va_list ap;
     __builtin_va_start(ap, fmt);
-    ret = _vsnprintf(buf, size, fmt, ap);
+    ret = __builtin_vsnprintf(buf, size, fmt, ap);
     __builtin_va_end(ap);
     return ret;
 }
@@ -477,6 +528,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__SleepConditionVariableCS@12:\n"
     "    .long _SleepConditionVariableCS@12\n"
+    ".globl __imp__SetThreadDescription@8\n"
+    ".align 4\n"
+    "__imp__SetThreadDescription@8:\n"
+    "    .long _SetThreadDescription@8\n"
     ".globl __imp___snprintf\n"
     ".align 4\n"
     "__imp___snprintf:\n"
@@ -485,6 +540,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp___strnicmp:\n"
     "    .long __strnicmp\n"
+    ".globl __imp___vsnprintf\n"
+    ".align 4\n"
+    "__imp___vsnprintf:\n"
+    "    .long __vsnprintf\n"
     ".text\n"
 );
 K32EOF
@@ -597,9 +656,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -750,7 +809,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
