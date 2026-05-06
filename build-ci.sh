@@ -179,6 +179,37 @@ NTSTATUS __stdcall D3DKMTOpenAdapterFromGdiDisplayName(void *a){return STATUS_UN
 NTSTATUS __stdcall D3DKMTOpenAdapterFromLuid(void *a){return STATUS_UNSUCCESSFUL;}
 NTSTATUS __stdcall D3DKMTQueryVideoMemoryInfo(void *a){return STATUS_UNSUCCESSFUL;}
 NTSTATUS __stdcall D3DKMTSetVidPnSourceOwner(const void *a){return STATUS_UNSUCCESSFUL;}
+
+/* GetModuleHandleExW — Vista+ kernel32 API. Provide Win98-compatible fallback.
+   wined3d typically calls with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS to get
+   the module handle from an address. Uses VirtualQuery (Win95+) for that case,
+   and GetModuleHandleA (Win95+) with W→A conversion for the name case. */
+typedef unsigned long DWORD;
+typedef unsigned short WCHAR;
+typedef const WCHAR *LPCWSTR;
+typedef void *HMODULE;
+typedef int BOOL;
+#define GET_MODULE_HANDLE_EX_FLAG_PIN 0x1
+#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 0x2
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
+HMODULE __stdcall GetModuleHandleA(const char *);
+typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
+DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
+BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
+{
+    if(!module) return 0;
+    if(flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
+        MBINFO mbi;
+        if(VirtualQuery((const void *)name, &mbi, sizeof(mbi)))
+            { *module = (HMODULE)mbi.AllocationBase; return 1; }
+        return 0;
+    }
+    if(!name) { *module = (HMODULE)(size_t)0x400000; return 1; }
+    /* W→A conversion for named lookup */
+    { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
+      *module = GetModuleHandleA(buf); }
+    return *module != 0;
+}
 D3DKMTEOF
     sed -i 's/^C_SRCS\s*=/C_SRCS = d3dkmt_stubs.c /' dlls/wined3d/Makefile.in
 
@@ -208,6 +239,17 @@ SPECEOF
 }
 
 # ── qemu-3dfx ddraw HAL stubs ────────────────────────────────────────
+# ── Strip Vista+ imports from kernel32 import lib ────────────────────
+# GetModuleHandleExW is Vista+ only. wined3d uses it but we provide an
+# XP-compatible stub in d3dkmt_stubs.c. Remove the import from the spec
+# so winebuild never generates the IAT thunk.
+strip_kernel32_vista_imports() {
+    if [ -f dlls/kernel32/kernel32.spec ]; then
+        sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
+        echo "    Stripped GetModuleHandleExW from kernel32.spec (Vista+ API → local stub)"
+    fi
+}
+
 # VidMem/HAL export stubs for the qemu-3dfx passthrough layer.
 # Changes @ stub entries to @ stdcall so our C implementations are used.
 create_ddraw_hooks() {
@@ -294,6 +336,9 @@ build_modern() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
+    strip_kernel32_vista_imports
 
     echo "    Configuring (native PE mode on MSYS2)..."
     CROSSCC=gcc ./configure \
@@ -383,6 +428,9 @@ build_legacy() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
+    strip_kernel32_vista_imports
 
     echo "    Configuring (legacy winegcc mode)..."
     ./configure \
@@ -669,6 +717,27 @@ generate_import_libs() {
                 -w --implib -o "$implib" --export "$spec" || true
         fi
     done
+
+    # Strip GetModuleHandleExW from kernel32 import lib — it's a Vista+ API
+    # and wined3d uses it via __declspec(dllimport). Remove both the direct
+    # and __imp__ thunks so the linker uses our XP-compatible stub instead.
+    local k32="dlls/kernel32/libkernel32.a"
+    if [ -f "$k32" ]; then
+        local tmpdir="${TMPDIR:-/tmp}/k32_strip_$$_$(date +%s)"
+        mkdir -p "$tmpdir"
+        local curdir="$(pwd)"
+        cd "$tmpdir"
+        ar x "$k32"
+        for obj in *.o; do
+            objcopy --strip-symbol _GetModuleHandleExW@12 \
+                    --strip-symbol __imp__GetModuleHandleExW@12 \
+                    "$obj" 2>/dev/null || true
+        done
+        ar cr "$k32" *.o
+        rm -rf "$tmpdir"
+        cd "$curdir"
+        echo "    Stripped GetModuleHandleExW from libkernel32.a (Vista+ API → local stub)"
+    fi
 }
 
 # ── Stub libwine.a ──────────────────────────────────────────────────
