@@ -301,8 +301,12 @@ strip_kernel32_vista_imports() {
         SetThreadDescription@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    # ntdll CRT stubs (cdecl, no @N suffix)
-    for api in _snprintf _strnicmp _vsnprintf; do
+    # ntdll CRT functions (cdecl, no @N suffix) — resolve from msvcrt instead
+    for api in _snprintf _strnicmp _vsnprintf _stricmp \
+               sprintf vsprintf snprintf vsnprintf sscanf \
+               memcpy memset memmove memcmp \
+               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
+               tolower toupper atoi atol strtol qsort bsearch; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -344,7 +348,11 @@ strip_kernel32_vista_imports_wine() {
         SetThreadDescription@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    for api in _snprintf _strnicmp _vsnprintf; do
+    for api in _snprintf _strnicmp _vsnprintf _stricmp \
+               sprintf vsprintf snprintf vsnprintf sscanf \
+               memcpy memset memmove memcmp \
+               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
+               tolower toupper atoi atol strtol qsort bsearch; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -466,24 +474,9 @@ HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescriptio
 
 /* --- ntdll CRT stubs (not available on Win98 ntdll.dll) ---
    Wine imports these from ntdll but Win98's ntdll is minimal.
-   Provide local implementations that don't depend on ntdll.
-   NOTE: cannot use __builtin_vsnprintf — it expands to vsnprintf
-   which we also strip from ntdll. Use _vsnprintf from msvcrt instead. */
-typedef __builtin_va_list va_list_crt;
-int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, va_list_crt ap)
-{
-    /* Minimal vsnprintf: just null-terminate and return 0.
-       Wine uses these for debug logging (which we stub out anyway)
-       and some string formatting. Most calls go through wine_dbg_log
-       which is already a no-op. */
-    if(buf && size > 0) buf[0] = 0;
-    return 0;
-}
-int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
-{
-    if(buf && size > 0) buf[0] = 0;
-    return 0;
-}
+   _vsnprintf and _snprintf are resolved from msvcrt instead (stripped
+   from ntdll import libs). Only _strnicmp needs a local stub since
+   it may not be in all msvcrt versions. */
 int __cdecl _strnicmp(const char *s1, const char *s2, unsigned int n)
 {
     if(!n) return 0;
@@ -536,18 +529,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__SetThreadDescription@8:\n"
     "    .long _SetThreadDescription@8\n"
-    ".globl __imp___snprintf\n"
-    ".align 4\n"
-    "__imp___snprintf:\n"
-    "    .long __snprintf\n"
     ".globl __imp___strnicmp\n"
     ".align 4\n"
     "__imp___strnicmp:\n"
     "    .long __strnicmp\n"
-    ".globl __imp___vsnprintf\n"
-    ".align 4\n"
-    "__imp___vsnprintf:\n"
-    "    .long __vsnprintf\n"
     ".text\n"
 );
 K32EOF
@@ -660,9 +645,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -813,7 +798,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_snprintf,__imp___snprintf,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
