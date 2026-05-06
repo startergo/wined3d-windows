@@ -65,6 +65,7 @@ long WINAPI InternalUnlock(void *lpDDSurface, void *lpSurfaceData, DWORD dwFlags
    DDK: HRESULT LateAllocateSurfaceMem(lpSurface, allocType, widthOrSize, height) */
 long WINAPI LateAllocateSurfaceMem(void *lpSurface, DWORD dwAllocType, DWORD dwWidth, DWORD dwHeight)
 {
+    return 0;
 }
 
 /* Video memory allocation.

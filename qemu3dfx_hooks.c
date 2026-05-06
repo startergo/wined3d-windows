@@ -93,6 +93,8 @@ void WINAPI wined3d_override_cooplevel(DWORD *cooplevel)
     *cooplevel ^= flags;
 }
 
+static void load_wgl_3dfx_extensions(void);
+
 BOOL WINAPI wined3d_hal_3dfx(void)
 {
     static BOOL checked = FALSE;
