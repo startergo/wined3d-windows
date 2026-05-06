@@ -1,0 +1,202 @@
+name: Build Wine D3D DLLs
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Space-separated Wine versions to build (leave empty for all)'
+        required: false
+        default: ''
+      force_rebuild:
+        description: 'Force rebuild even if artifacts exist'
+        type: boolean
+        default: false
+      create_release:
+        description: 'Create a GitHub Release with the bundled DLLs'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wine_version: "1.8.7"
+            wine_branch: "1.8"
+            wine_ext: "tar.bz2"
+            build_msvcrt: "0"
+          - wine_version: "1.9.7"
+            wine_branch: "1.9"
+            wine_ext: "tar.bz2"
+            build_msvcrt: "0"
+          - wine_version: "2.0.5"
+            wine_branch: "2.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "3.0.5"
+            wine_branch: "3.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "4.12.1"
+            wine_branch: "4.x"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "5.0.5"
+            wine_branch: "5.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "6.0.4"
+            wine_branch: "6.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "1"
+          - wine_version: "7.0.2"
+            wine_branch: "7.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "8.0.2"
+            wine_branch: "8.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+
+    name: Wine ${{ matrix.wine_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (MINGW32)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-binutils
+            mingw-w64-i686-headers
+            mingw-w64-i686-winpthreads
+            mingw-w64-i686-crt
+            make
+            flex
+            bison
+            wget
+            git
+            diffutils
+
+      - name: Cache Wine source and CRT
+        uses: actions/cache@v4
+        with:
+          path: src
+          key: wine-src-${{ matrix.wine_version }}-v9
+
+      - name: Build Wine ${{ matrix.wine_version }}
+        shell: msys2 {0}
+        run: |
+          bash build-ci.sh --force --versions ${{ matrix.wine_version }}
+
+      - name: Set build-timestamp executable
+        shell: bash
+        run: chmod +x output/${{ matrix.wine_version }}/build-timestamp
+
+      - name: Verify dependencies
+        shell: msys2 {0}
+        run: |
+          fail=0
+          for dll in wined3d d3d9 d3d8 ddraw; do
+            path="output/${{ matrix.wine_version }}/${dll}.dll"
+            [ -f "$path" ] || continue
+            echo "=== ${dll}.dll imports ==="
+            objdump -p "$path" | grep "DLL Name"
+            if objdump -p "$path" | grep -q "ucrtbase"; then
+              echo "ERROR: ${dll}.dll links against ucrtbase.dll — must use msvcrt instead"
+              fail=1
+            fi
+            if objdump -p "$path" | grep -q "libwine.dll"; then
+              echo "ERROR: ${dll}.dll links against libwine.dll — should be static"
+              fail=1
+            fi
+            echo "OK"
+          done
+          exit $fail
+
+      - name: Upload DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dlls-${{ matrix.wine_version }}
+          path: output/${{ matrix.wine_version }}/
+          retention-days: 30
+          if-no-files-found: error
+
+  bundle:
+    runs-on: ubuntu-latest
+    needs: build
+    name: Bundle all DLLs
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+          pattern: wine-dlls-*
+
+      - name: Restructure into wine/ directory
+        run: |
+          mkdir -p wine
+          for dir in staging/wine-dlls-*; do
+            [ -d "$dir" ] || continue
+            version="${dir##*/wine-dlls-}"
+            mv "$dir" "wine/$version"
+          done
+
+      - name: Set build-timestamps executable
+        run: find wine -name build-timestamp -exec chmod +x {} +
+
+      - name: Upload bundled archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dlls-all
+          path: wine
+          retention-days: 30
+
+  release:
+    runs-on: ubuntu-latest
+    needs: bundle
+    name: Create Release
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download bundled artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-dlls-all
+          path: wine
+
+      - name: Create archive
+        run: tar -czf wine-d3d-dlls.tar.gz wine
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$(date '+%Y.%m.%d')"
+          TITLE="Wine D3D DLLs $(date '+%Y-%m-%d')"
+          gh release create "$TAG" wine-d3d-dlls.tar.gz \
+            --title "$TITLE" \
+            --notes "Wine D3D DLLs built from source for all supported versions (1.8.7–8.0.2).
+
+          Includes: wined3d.dll, d3d9.dll, d3d8.dll, ddraw.dll per version.
+          Wine 6.0.4 also includes msvcrt.dll.
+          All DLLs link against msvcrt.dll (no ucrtbase.dll dependency)."
