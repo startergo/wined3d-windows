@@ -213,16 +213,13 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
       *module = GetModuleHandleA(buf); }
     return *module != 0;
 }
-/* Provide __imp__ pointer for __declspec(dllimport) callers.
-   Exclude from DLL exports so it doesn't leak to import libs (ddraw etc.). */
+/* Provide __imp__ pointer for __declspec(dllimport) callers. */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp__GetModuleHandleExW@12:\n"
     "    .long _GetModuleHandleExW@12\n"
-    ".section .drectve\n"
-    ".ascii \" -exclude-symbols:_GetModuleHandleExW@12,__imp__GetModuleHandleExW@12\"\n"
     ".text\n"
 );
 D3DKMTEOF
@@ -254,22 +251,40 @@ SPECEOF
 }
 
 # ── qemu-3dfx ddraw HAL stubs ────────────────────────────────────────
-# ── Weaken Vista+ symbols in kernel32 import libs ───────────────────
-# GetModuleHandleExW is Vista+ only. wined3d uses it via __declspec(dllimport)
-# which generates _imp__GetModuleHandleExW@12 references. Our d3dkmt_stubs.c
-# provides both the function and the _imp__ pointer with strong linkage.
-# Weaken the kernel32 import lib versions so our strong definition wins.
-weaken_kernel32_imports() {
-    local sym="_GetModuleHandleExW@12"
-    local isym="__imp__GetModuleHandleExW@12"
+# ── Strip GetModuleHandleExW from kernel32 ──────────────────────────
+# GetModuleHandleExW is Vista+ only. wined3d uses it via __declspec(dllimport).
+# Our d3dkmt_stubs.c provides a Win98-compatible stub. Prevent the real
+# import from appearing in any kernel32 import lib and exclude our stub
+# from DLL exports via linker flag.
+strip_kernel32_vista_imports() {
+    # Remove from kernel32.spec so Wine's build system never generates
+    # import lib thunks for it.
+    if [ -f dlls/kernel32/kernel32.spec ]; then
+        sed -i '/GetModuleHandleExW/d' dlls/kernel32/kernel32.spec
+        echo "    Stripped GetModuleHandleExW from kernel32.spec"
+    fi
+    # Also strip from system MinGW kernel32 import libs
     for k32 in /mingw32/lib/libkernel32.a \
-               /mingw32/i686-w64-mingw32/lib/libkernel32.a \
-               dlls/kernel32/libkernel32.a \
-               dlls/kernel32/i386-windows/libkernel32.a; do
+               /mingw32/i686-w64-mingw32/lib/libkernel32.a; do
         [ -f "$k32" ] || continue
-        objcopy --weaken-symbol="$sym" --weaken-symbol="$isym" "$k32" 2>/dev/null || true
+        local tmpdir="${TMPDIR:-/tmp}/k32_strip_$$_$(date +%s)"
+        mkdir -p "$tmpdir"
+        local curdir="$(pwd)"
+        cd "$tmpdir"
+        ar x "$k32" 2>/dev/null || true
+        local objcount=$(ls -1 *.o 2>/dev/null | wc -l)
+        if [ "$objcount" -gt 0 ]; then
+            for obj in *.o; do
+                objcopy --strip-symbol _GetModuleHandleExW@12 \
+                        --strip-symbol __imp__GetModuleHandleExW@12 \
+                        "$obj" 2>/dev/null || true
+            done
+            ar cr "$k32" *.o
+        fi
+        rm -rf "$tmpdir"
+        cd "$curdir"
     done
-    echo "    Weakened GetModuleHandleExW in kernel32 import libs (Vista+ API → local stub)"
+    echo "    Stripped GetModuleHandleExW from kernel32 import libs"
 }
 
 # VidMem/HAL export stubs for the qemu-3dfx passthrough layer.
@@ -360,7 +375,7 @@ build_modern() {
     create_ddraw_hooks
 
     # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
-    weaken_kernel32_imports
+    strip_kernel32_vista_imports
 
     echo "    Configuring (native PE mode on MSYS2)..."
     CROSSCC=gcc ./configure \
@@ -373,9 +388,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Wl,--exclude-symbols,_GetModuleHandleExW@12,__imp__GetModuleHandleExW@12" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Wl,--exclude-symbols,_GetModuleHandleExW@12,__imp__GetModuleHandleExW@12"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -452,7 +467,7 @@ build_legacy() {
     create_ddraw_hooks
 
     # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
-    weaken_kernel32_imports
+    strip_kernel32_vista_imports
 
     echo "    Configuring (legacy winegcc mode)..."
     ./configure \
@@ -515,6 +530,9 @@ for arg in "\$@"; do
 done
 if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
+    # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
+    # leak into import libs (causes ddraw.dll export errors).
+    args+=(-Wl,--exclude-symbols,_GetModuleHandleExW@12,__imp__GetModuleHandleExW@12)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
