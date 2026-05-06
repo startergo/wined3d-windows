@@ -1,5 +1,9 @@
 # Wine D3D DLLs for qemu-3dfx
 
+> **Status: Alpha** — builds are functional but not yet tested end-to-end
+> with qemu-3dfx passthrough. API stubs and compatibility shims are still
+> being validated on target platforms (Win98 SE).
+
 Cross-builds Wine's DirectDraw, Direct3D 8, Direct3D 9, and wined3d DLLs as
 standalone 32-bit Windows binaries using MinGW-w64. Designed for use with
 [qemu-3dfx](https://github.com/kjliew/qemu-3dfx) to provide hardware-accelerated
