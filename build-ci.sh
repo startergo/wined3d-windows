@@ -498,6 +498,34 @@ int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
     return 0;
 }
 
+/* --- Standard C library (normally from ntdll, not on Win98) --- */
+int __cdecl atoi(const char *s)
+{
+    int n = 0, neg = 0;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+    while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); s++; }
+    return neg ? -n : n;
+}
+long __cdecl atol(const char *s) { return (long)atoi(s); }
+int __cdecl abs(int n) { return n < 0 ? -n : n; }
+int __cdecl isprint(int c) { return c >= 32 && c < 127; }
+int __cdecl isdigit(int c) { return c >= '0' && c <= '9'; }
+int __cdecl isalpha(int c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+int __cdecl isalnum(int c) { return isalpha(c) || isdigit(c); }
+int __cdecl isspace(int c) { return c == ' ' || (c >= 9 && c <= 13); }
+int __cdecl isupper(int c) { return c >= 'A' && c <= 'Z'; }
+int __cdecl islower(int c) { return c >= 'a' && c <= 'z'; }
+int __cdecl isxdigit(int c) { return isdigit(c) || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'); }
+int __cdecl iscntrl(int c) { return (c >= 0 && c <= 31) || c == 127; }
+int __cdecl isgraph(int c) { return c > 32 && c < 127; }
+int __cdecl ispunct(int c) { return isgraph(c) && !isalnum(c); }
+
+/* --- __acrt_iob_func (UCRT, not in Win98 msvcrt.dll) ---
+   Redirects to __iob_func (available in all msvcrt versions). */
+void * __cdecl __iob_func(void);
+void * __cdecl __acrt_iob_func(unsigned int i) { return (char *)__iob_func() + i * 32; }
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
@@ -549,6 +577,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp___snprintf:\n"
     "    .long __snprintf\n"
+    ".globl __imp____acrt_iob_func\n"
+    ".align 4\n"
+    "__imp____acrt_iob_func:\n"
+    "    .long ___acrt_iob_func\n"
     ".text\n"
 );
 K32EOF
@@ -661,9 +693,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -814,7 +846,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
