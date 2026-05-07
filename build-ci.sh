@@ -755,10 +755,11 @@ build_modern() {
     find . -name 'Makefile.in' | xargs grep -l 'ucrtbase' 2>/dev/null | \
         xargs sed -i 's/-lucrtbase/-lmsvcrt/g' 2>/dev/null || true
 
-    # Gut dlls/ucrtbase/Makefile.in so makedep generates an empty PE lib.
-    # This prevents Wine from building a real ucrtbase import library that
-    # would pull in ucrtbase.dll. Our ucrtcompat stubs in libmsvcrt.a satisfy
-    # __acrt_iob_func/__stdio_common_* before the empty libucrtbase.a is searched.
+    # Gut dlls/ucrtbase so Wine builds an empty import lib.
+    # ucrtbase exports CRT functions (strlen, memset, etc.) that conflict
+    # with ntdll's versions when both are in the link. Empty the spec so
+    # winebuild generates libucrtbase.a with no exports. Our kernel32_compat.c
+    # stubs provide the few UCRT functions actually needed (__acrt_iob_func).
     if [ -f dlls/ucrtbase/Makefile.in ]; then
         sed -i \
             -e '/^DELAYIMPORTS/d' \
@@ -767,6 +768,7 @@ build_modern() {
             -e 's/^RC_SRCS\s*=.*/RC_SRCS =/' \
             dlls/ucrtbase/Makefile.in
     fi
+    : > dlls/ucrtbase/ucrtbase.spec 2>/dev/null || true
 
     # D3DKMT stubs — prevent Vista+-only static imports from gdi32.dll
     create_d3dkmt_stubs
