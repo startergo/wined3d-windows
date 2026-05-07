@@ -20,11 +20,13 @@ dependency:
 | `wined3d.dll` | Wine's Direct3D translation layer + qemu-3dfx passthrough hooks |
 | `d3d9.dll` | Direct3D 9 |
 | `d3d8.dll` | Direct3D 8 |
-| `ddraw.dll` | DirectDraw + VidMem HAL stubs |
+| `ddraw.dll` | DirectDraw + VidMem HAL stubs + passthrough bridge |
 | `msvcrt.dll` | C runtime (Wine 6.0.4 only) |
 
-All DLLs target Windows 98 SE compatibility (D3DKMT Vista+ imports and
-`GetModuleHandleExW` are stubbed out with Win98-compatible fallbacks).
+All DLLs target Windows 98 SE compatibility: Vista+ kernel32 APIs
+(GetModuleHandleExW, Condition Variables, etc.), UCRT functions
+(__stdio_common_*), and CRT startup functions (_initterm_e) are stubbed
+out with Win98-compatible fallbacks.
 
 ## Supported Wine Versions
 
@@ -51,7 +53,7 @@ directly targets `i386-windows/` DLL output via MinGW-w64.
 ## qemu-3dfx Passthrough Hooks
 
 Custom code injected into the DLL builds to match the original qemu-3dfx
-Wine patches.
+Wine patches. Full documentation in [`qemu-3dx-hooks.md`](qemu-3dx-hooks.md).
 
 ### wined3d.dll — 9 custom exports
 
@@ -65,16 +67,17 @@ Injected via `qemu3dfx_hooks.c`:
 | `wined3d_passthru` | Set/get passthrough mode |
 | `wined3d_override_cooplevel` | XORs `DDSCL_EXCLUSIVE` into cooperative level |
 | `wined3d_override_rendertarget_view` | Sets bit 0x20 in `resource->access_flags` for passthrough RTV |
-| `wined3d_get_gamma_ramp_3dfx` | Wraps `wglGetDeviceGammaRamp3DFX` from wrapper opengl32.dll |
-| `wined3d_set_gamma_ramp_3dfx` | Wraps `wglSetDeviceGammaRamp3DFX` |
-| `wined3d_set_cursor_3dfx` | Wraps `wglSetDeviceCursor3DFX` |
+| `wined3d_blit_fpslimit` | Blit frame rate limiter |
+| `wined3d_flip_fpslimit` | Flip frame rate limiter |
+| `wined3d_get/set_gamma_ramp_3dfx` | WGL 3DFX gamma ramp wrappers |
+| `wined3d_set_cursor_3dfx` | WGL 3DFX cursor wrapper |
 
 Embedded strings: `QEMU` debug channel, registry keys `D3D1Hal3Dfx` /
 `D3D1EnumHalLast`, WGL extension strings.
 
-### ddraw.dll — 14 custom exports
+### ddraw.dll — 14 HAL stubs + passthrough bridge
 
-Injected via `qemu3dfx_ddraw_hooks.c`. No-op stubs — the passthrough
+**HAL stubs** via `qemu3dfx_ddraw_hooks.c`. No-op stubs — the passthrough
 wrapper handles actual video memory management. Signatures verified against
 NT 4.0 and XP SP1 DDK source code:
 
@@ -95,28 +98,53 @@ NT 4.0 and XP SP1 DDK source code:
 | `LateAllocateSurfaceMem` | ddrawi.h |
 | `DSoundHelp` | dddefwp.c (NT5) |
 
+**Passthrough bridge** via `qemu3dfx_ddraw_passthrough.c`. Bridges ddraw
+to wined3d passthrough functions at key lifecycle points:
+
+| Hook | Injection Point | Purpose |
+|------|----------------|---------|
+| Init | DllMain, after DisableThreadLibraryCalls | Detect qemu-3dfx, enable passthrough, mark HAL enum complete |
+| Cooplevel | SetCooperativeLevel, after DDRAW_dump_cooperativelevel | Override cooperative level for passthrough fullscreen |
+| Blit FPS | ddraw_surface_blt, before texture/device_context blit | Frame rate limiting on blit |
+| Flip FPS | ddraw_surface_Flip, at DDSCAPS_FLIP init | Frame rate limiting on flip |
+| RTV | Flip, after ddraw_surface_get_rendertarget_view | Mark render target for passthrough rendering |
+
 ## Architecture
 
 ```
 Guest Application
     |
     v
-ddraw.dll ---- imports wined3d_hal_3dfx, wined3d_passthru, etc.
-    |                 |
-    |                 v
-    |           wined3d.dll --- probes \\.\QEMUchs
-    |                 |          sets passthrough globals
-    |                 |          overrides RTV access_flags
-    |                 |          loads WGL 3DFX extensions
-    |                 v
-    |           opengl32.dll (qemu-3dfx wrapper: WRAPGL32.DLL)
-    |                 |
-    v                 v
-VidMem HAL stubs   mesapt shared memory
-(return 0/NULL)         |
-                        v
-                   Host GPU (3dfx OpenGL passthrough)
+ddraw.dll ──── passthrough bridge (qemu3dfx_ddraw_passthrough.c)
+    |           ├── DllMain → detect qemu-3dfx, enable passthrough
+    |           ├── SetCooperativeLevel → override coop level
+    |           ├── Blit/Flip → FPS limiters
+    |           └── RTV setup → mark for passthrough
+    |
+    |        ──── VidMem HAL stubs (qemu3dfx_ddraw_hooks.c)
+    |           DDHAL32_VidMemAlloc, VidMemFree, etc.
+    |
+    v
+wined3d.dll ─── probes \\.\QEMUchs, manages passthrough state
+    |             loads WGL 3DFX extensions
+    v
+opengl32.dll (qemu-3dfx wrapper) → mesapt → Host GPU
 ```
+
+## Win98 Compatibility
+
+The build injects stubs and strips Vista+ imports so all DLLs load on
+Windows 98 SE without missing-export errors:
+
+| Issue | Versions Affected | Fix |
+|-------|-------------------|-----|
+| `_initterm_e` missing from msvcrt.dll | 4–5 | Local CRT stub + import lib stripping |
+| `GetModuleHandleExW` missing from kernel32.dll | 6–7 | Vista+ import lib stripping |
+| `__stdio_common_*` UCRT functions | 6–7 | UCRT compat stubs + import lib stripping |
+| ntdll.dll import leaks | 6–7 | CRT stripping from Wine import libs |
+| Missing `wined3d_enum_hal_last` call | 1–3 | Passthrough bridge init call |
+| Flip sed pattern mismatch (DDSCAPS vs DDSCAPS2) | 6–8 | Regex flexibility: `DDSCAPS2\?` |
+| Blit API change (texture_blt → device_context_blt) | 7–8 | Dual sed pattern fallback |
 
 ## Quick Start
 
@@ -197,6 +225,8 @@ cleanly with MinGW-w64:
 build-ci.sh                  Standalone build script (MSYS2 / Linux)
 qemu3dfx_hooks.c             Passthrough hooks for wined3d (9 exports)
 qemu3dfx_ddraw_hooks.c       VidMem HAL stubs for ddraw (14 exports)
+qemu3dfx_ddraw_passthrough.c  ddraw → wined3d passthrough bridge
+qemu-3dx-hooks.md            Complete hooks reference documentation
 PKGBUILD                     MSYS2/MinGW package build definition
 .github/workflows/build.yml  GitHub Actions CI
 ```

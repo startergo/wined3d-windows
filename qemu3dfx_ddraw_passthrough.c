@@ -16,6 +16,7 @@
 /* Passthrough functions exported by wined3d.dll */
 extern BOOL WINAPI wined3d_hal_3dfx(void);
 extern BOOL WINAPI wined3d_enum_hal_last(void);
+extern void *WINAPI wined3d_surface_ddheap(void);
 extern BOOL WINAPI wined3d_passthru(BOOL *enabled);
 extern void WINAPI wined3d_override_cooplevel(DWORD *cooplevel);
 extern void WINAPI wined3d_override_rendertarget_view(void *view_ptr);
@@ -32,6 +33,8 @@ void qemu3dfx_ddraw_passthrough_init(void)
         BOOL enable = TRUE;
         wined3d_passthru(&enable);
         g_passthru_active = TRUE;
+        wined3d_enum_hal_last();
+        wined3d_surface_ddheap();
     }
 }
 

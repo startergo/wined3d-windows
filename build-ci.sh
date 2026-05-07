@@ -348,6 +348,24 @@ strip_kernel32_vista_imports() {
             rm -f "$tmp"
         fi
     done
+
+    # Strip _initterm_e from msvcrt import libs — Win98's msvcrt.dll lacks it.
+    # Our kernel32_compat.c provides local stubs instead.
+    local strip_crt=()
+    for api in _initterm _initterm_e; do
+        strip_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
+    for lib in /mingw32/lib/libmsvcrt.a \
+               /mingw32/i686-w64-mingw32/lib/libmsvcrt.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_crt_$$_$(date +%s).a"
+        if objcopy "${strip_crt[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped _initterm/_initterm_e from $lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
 }
 
 # Strip Vista+ symbols from Wine's OWN import libs (built by make tools).
@@ -377,7 +395,8 @@ strip_kernel32_vista_imports_wine() {
     for api in _snprintf _strnicmp _vsnprintf \
                atoi atol abs \
                isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
-               __acrt_iob_func; do
+               __acrt_iob_func \
+               _initterm _initterm_e; do
         strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
     # Vista+ APIs + stub CRT: strip from all libs (kernel32, ntdll, ucrtbase, msvcrt)
@@ -769,6 +788,26 @@ int __cdecl _fstat32(int fd, void *buf) { (void)fd; (void)buf; return -1; }
 static char _dummy_iob[96];
 void * __cdecl __acrt_iob_func(unsigned int i) { return (i < 3) ? _dummy_iob + i * 32 : 0; }
 
+/* --- _initterm / _initterm_e (CRT startup, not in Win98 msvcrt.dll) ---
+   Called by MinGW DLL startup to walk C++ initializer arrays.
+   _initterm calls each function; _initterm_e returns first error. */
+typedef int (*_initfn)(void);
+void __cdecl _initterm(_initfn *begin, _initfn *end)
+{
+    for (; begin < end; begin++)
+        if (*begin) (*begin)();
+}
+int __cdecl _initterm_e(_initfn *begin, _initfn *end)
+{
+    for (; begin < end; begin++) {
+        if (*begin) {
+            int ret = (*begin)();
+            if (ret) return ret;
+        }
+    }
+    return 0;
+}
+
 /* --- UCRT-specific floating-point classification (not in msvcrt.dll) ---
    Used by vkd3d (Vulkan shader compiler). No-op stubs. */
 int __cdecl _fdclass(float x) { (void)x; return 0; }
@@ -786,6 +825,15 @@ int __cdecl __stdio_common_vsscanf(_u64 o, const char *s, unsigned int n, const 
 
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
+    ".globl __imp___initterm\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp___initterm:\n"
+    "    .long _initterm\n"
+    ".globl __imp___initterm_e\n"
+    ".align 4\n"
+    "__imp___initterm_e:\n"
+    "    .long _initterm_e\n"
     ".globl __imp__GetModuleHandleExW@12\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
@@ -1084,6 +1132,9 @@ BOOL WINAPI DllMain/' dlls/ddraw/main.c
         # Add init call in DLL_PROCESS_ATTACH, after DisableThreadLibraryCalls
         sed -i 's/DisableThreadLibraryCalls(inst);/DisableThreadLibraryCalls(inst);\
         qemu3dfx_ddraw_passthrough_init();/' dlls/ddraw/main.c
+        grep -q 'qemu3dfx_ddraw_passthrough_init' dlls/ddraw/main.c && \
+            echo "    main.c: passthrough init hook injected" || \
+            echo "    WARNING: main.c passthrough init hook NOT injected (sed mismatch)"
     fi
 
     # ── Patch ddraw.c: cooplevel override in SetCooperativeLevel ───
@@ -1094,6 +1145,9 @@ extern void qemu3dfx_ddraw_cooplevel(DWORD *);/' dlls/ddraw/ddraw.c
         # Add cooplevel override right after DDRAW_dump_cooperativelevel
         sed -i 's/DDRAW_dump_cooperativelevel(cooplevel);/DDRAW_dump_cooperativelevel(cooplevel);\
     qemu3dfx_ddraw_cooplevel(\&cooplevel);/' dlls/ddraw/ddraw.c
+        grep -q 'qemu3dfx_ddraw_cooplevel' dlls/ddraw/ddraw.c && \
+            echo "    ddraw.c: cooplevel override hook injected" || \
+            echo "    WARNING: ddraw.c cooplevel hook NOT injected (sed mismatch)"
     fi
 
     # ── Patch surface.c: blit/flip FPS limiters + RTV override ─────
@@ -1103,15 +1157,24 @@ extern void qemu3dfx_ddraw_cooplevel(DWORD *);/' dlls/ddraw/ddraw.c
 extern void qemu3dfx_ddraw_blit(void);\
 extern void qemu3dfx_ddraw_flip(void);\
 extern void qemu3dfx_ddraw_rtv(void *);/' dlls/ddraw/surface.c
-        # Add blit limiter call before wined3d_texture_blt in ddraw_surface_blt
+        # Add blit limiter call before wined3d_texture_blt (Wine ≤ 6)
         sed -i 's/return wined3d_texture_blt(dst_surface/qemu3dfx_ddraw_blit();\
     return wined3d_texture_blt(dst_surface/' dlls/ddraw/surface.c
+        # Add blit limiter call before wined3d_device_context_blt (Wine 7+)
+        sed -i 's/return wined3d_device_context_blt(ddraw/qemu3dfx_ddraw_blit();\
+    return wined3d_device_context_blt(ddraw/' dlls/ddraw/surface.c
         # Add flip limiter: match DDSCAPS_FLIP (unique to Flip function)
-        sed -i 's/\(DDSCAPS2 caps = {DDSCAPS_FLIP.*\)/\1\
+        # Wine ≤ 5: DDSCAPS2 caps = {DDSCAPS_FLIP, 0, 0, {0}};
+        # Wine ≥ 6: DDSCAPS  caps = {DDSCAPS_FLIP};
+        sed -i 's/\(DDSCAPS2\? caps = {DDSCAPS_FLIP.*\)/\1\
     qemu3dfx_ddraw_flip();/' dlls/ddraw/surface.c
         # Add RTV override after getting rendertarget view in Flip
         sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\
     qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c
+        # Verify patches applied
+        echo "    Verifying passthrough patches..."
+        grep -c 'qemu3dfx_ddraw_blit\|qemu3dfx_ddraw_flip\|qemu3dfx_ddraw_rtv' dlls/ddraw/surface.c | \
+            xargs -I{} echo "      surface.c: {} passthrough hook(s) injected"
     fi
 }
 
@@ -1189,9 +1252,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -1349,7 +1412,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
@@ -1532,7 +1595,8 @@ WGEOF
                pow exp log \
                getc ungetc \
                atoi atol abs \
-               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct; do
+               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
+               _initterm _initterm_e; do
         strip_legacy_ntdll+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
     for lib in dlls/ntdll/libntdll.a; do
@@ -1541,6 +1605,56 @@ WGEOF
         if objcopy "${strip_legacy_ntdll[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
             echo "    Stripped CRT from Wine-generated ntdll import lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
+
+    # Strip Vista+ kernel32 APIs from Wine-generated kernel32 import lib.
+    # The spec stripping may not stick if make regenerates from .spec.in.
+    local strip_legacy_k32=()
+    for api in \
+        GetModuleHandleExW@12 GlobalMemoryStatusEx@4 \
+        RtlIsCriticalSectionLockedByThread@4 \
+        InitOnceExecuteOnce@16 \
+        InitOnceBeginInitialize@16 InitOnceComplete@12 InitOnceInitialize@4 \
+        InitializeSRWLock@4 \
+        AcquireSRWLockExclusive@4 AcquireSRWLockShared@4 \
+        ReleaseSRWLockExclusive@4 ReleaseSRWLockShared@4 \
+        TryAcquireSRWLockExclusive@4 TryAcquireSRWLockShared@4 \
+        InitializeConditionVariable@4 \
+        WakeConditionVariable@4 WakeAllConditionVariable@4 \
+        SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
+        GetTickCount64@0 \
+        SetThreadDescription@8; do
+        strip_legacy_k32+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
+    for lib in dlls/kernel32/libkernel32.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_legacy_k32_$$_$(date +%s).a"
+        if objcopy "${strip_legacy_k32[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped Vista+ APIs from Wine-generated kernel32 import lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
+
+    # Strip UCRT-specific functions from Wine-generated msvcrt import lib.
+    # Wine 6.x builds custom msvcrt.dll with __stdio_common_vsprintf etc.
+    # These are UCRT functions not in Win98's msvcrt.dll.  Our kernel32_compat.c
+    # provides local stubs — strip from import lib so the linker uses them.
+    local strip_legacy_crt=()
+    for api in __stdio_common_vsprintf __stdio_common_vfprintf __stdio_common_vsscanf \
+               _initterm _initterm_e; do
+        strip_legacy_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
+    for lib in dlls/msvcrt/libmsvcrt.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_legacy_crt_$$_$(date +%s).a"
+        if objcopy "${strip_legacy_crt[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped UCRT/CRT stubs from Wine msvcrt import lib"
         else
             rm -f "$tmp"
         fi
