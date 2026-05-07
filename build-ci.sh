@@ -272,6 +272,18 @@ strip_kernel32_vista_imports() {
                -e '/^@.*\bstrtol\b/d' \
                -e '/^@.*\bqsort\b/d' \
                -e '/^@.*\bbsearch\b/d' \
+               -e '/^@.*\bisprint\b/d' \
+               -e '/^@.*\bisdigit\b/d' \
+               -e '/^@.*\bisalpha\b/d' \
+               -e '/^@.*\bisalnum\b/d' \
+               -e '/^@.*\bisspace\b/d' \
+               -e '/^@.*\bisupper\b/d' \
+               -e '/^@.*\bislower\b/d' \
+               -e '/^@.*\bisxdigit\b/d' \
+               -e '/^@.*\biscntrl\b/d' \
+               -e '/^@.*\bisgraph\b/d' \
+               -e '/^@.*\bispunct\b/d' \
+               -e '/^@.*\babs\b/d' \
                "$spec"
     done
     echo "    Stripped Vista+ APIs and CRT from kernel32/ntdll specs"
@@ -331,7 +343,7 @@ strip_kernel32_vista_imports() {
 # Vista+ exports that our kernel32_compat.c stubs. Must strip AFTER make tools
 # builds them but BEFORE our DLLs are linked.
 strip_kernel32_vista_imports_wine() {
-    local strip_syms=()
+    local strip_all=()
     for api in \
         GetModuleHandleExW@12 GlobalMemoryStatusEx@4 \
         RtlIsCriticalSectionLockedByThread@4 \
@@ -346,18 +358,27 @@ strip_kernel32_vista_imports_wine() {
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
         SetThreadDescription@8; do
-        strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+        strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    for api in _snprintf _strnicmp _vsnprintf _stricmp \
+    # CRT we stub locally — strip from ALL Wine import libs including ntdll
+    for api in _snprintf _strnicmp _vsnprintf \
+               atoi atol abs \
+               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
+               __acrt_iob_func; do
+        strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
+    # Basic CRT that Win98 ntdll HAS — only strip from ucrtbase/msvcrt
+    # to avoid multiple-definition with our stubs. Do NOT strip from ntdll.
+    local strip_crtlib=()
+    for api in _stricmp \
                sprintf vsprintf snprintf vsnprintf sscanf \
                memcpy memset memmove memcmp \
                strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
-               tolower toupper atoi atol strtol qsort bsearch \
-               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct abs \
-               __acrt_iob_func; do
-        strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+               tolower toupper strtol qsort bsearch; do
+        strip_crtlib+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
+    # Vista+ APIs + stub CRT: strip from all libs (kernel32, ntdll, ucrtbase, msvcrt)
     for lib in \
         dlls/kernel32/i386-windows/libkernel32.a \
         dlls/kernel32/libkernel32.a \
@@ -369,9 +390,24 @@ strip_kernel32_vista_imports_wine() {
         dlls/msvcrt/libmsvcrt.a; do
         [ -f "$lib" ] || continue
         local tmp="${TMPDIR:-/tmp}/strip_wine_$$_$(date +%s).a"
-        if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+        if objcopy "${strip_all[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
             echo "    Stripped Vista+ symbols from Wine $lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
+    # Basic CRT: strip from ucrtbase/msvcrt only (avoid multiple-def with our stubs)
+    for lib in \
+        dlls/ucrtbase/i386-windows/libucrtbase.a \
+        dlls/ucrtbase/libucrtbase.a \
+        dlls/msvcrt/i386-windows/libmsvcrt.a \
+        dlls/msvcrt/libmsvcrt.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_crtlib_$$_$(date +%s).a"
+        if objcopy "${strip_crtlib[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped CRT symbols from Wine $lib"
         else
             rm -f "$tmp"
         fi
@@ -587,6 +623,62 @@ __asm__("\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
     "    .long ___acrt_iob_func\n"
+    ".globl __imp__atoi\n"
+    ".align 4\n"
+    "__imp__atoi:\n"
+    "    .long _atoi\n"
+    ".globl __imp__atol\n"
+    ".align 4\n"
+    "__imp__atol:\n"
+    "    .long _atol\n"
+    ".globl __imp__abs\n"
+    ".align 4\n"
+    "__imp__abs:\n"
+    "    .long _abs\n"
+    ".globl __imp__isprint\n"
+    ".align 4\n"
+    "__imp__isprint:\n"
+    "    .long _isprint\n"
+    ".globl __imp__isdigit\n"
+    ".align 4\n"
+    "__imp__isdigit:\n"
+    "    .long _isdigit\n"
+    ".globl __imp__isalpha\n"
+    ".align 4\n"
+    "__imp__isalpha:\n"
+    "    .long _isalpha\n"
+    ".globl __imp__isalnum\n"
+    ".align 4\n"
+    "__imp__isalnum:\n"
+    "    .long _isalnum\n"
+    ".globl __imp__isspace\n"
+    ".align 4\n"
+    "__imp__isspace:\n"
+    "    .long _isspace\n"
+    ".globl __imp__isupper\n"
+    ".align 4\n"
+    "__imp__isupper:\n"
+    "    .long _isupper\n"
+    ".globl __imp__islower\n"
+    ".align 4\n"
+    "__imp__islower:\n"
+    "    .long _islower\n"
+    ".globl __imp__isxdigit\n"
+    ".align 4\n"
+    "__imp__isxdigit:\n"
+    "    .long _isxdigit\n"
+    ".globl __imp__iscntrl\n"
+    ".align 4\n"
+    "__imp__iscntrl:\n"
+    "    .long _iscntrl\n"
+    ".globl __imp__isgraph\n"
+    ".align 4\n"
+    "__imp__isgraph:\n"
+    "    .long _isgraph\n"
+    ".globl __imp__ispunct\n"
+    ".align 4\n"
+    "__imp__ispunct:\n"
+    "    .long _ispunct\n"
     ".text\n"
 );
 K32EOF
