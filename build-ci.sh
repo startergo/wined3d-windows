@@ -880,9 +880,6 @@ build_modern() {
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
 
-    # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
-    strip_kernel32_vista_imports
-
     echo "    Configuring (native PE mode on MSYS2)..."
     CROSSCC=gcc ./configure \
         --enable-archs=i386 \
@@ -904,6 +901,9 @@ build_modern() {
     # (an MSYS2 binary on the MSYS2 PATH) instead.
     sed -i 's/ --without-dlltool//g' Makefile
 
+    # Strip Vista+ API from kernel32/ntdll specs — MUST be after configure,
+    # which regenerates spec files from .spec.in and undoes pre-configure sed.
+    strip_kernel32_vista_imports
 
     # Same objcopy treatment for msvcrt compatibility
     patch_mingw_archives
@@ -981,9 +981,6 @@ build_legacy() {
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
 
-    # Strip Vista+ API from kernel32 import (GetModuleHandleExW → local stub)
-    strip_kernel32_vista_imports
-
     echo "    Configuring (legacy winegcc mode)..."
     ./configure \
         --without-x \
@@ -995,6 +992,10 @@ build_legacy() {
         --disable-shared --enable-static \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__" \
         LDFLAGS="-static-libgcc -mcrtdll=msvcrt"
+
+    # Strip Vista+ API from kernel32/ntdll specs — MUST be after configure,
+    # which regenerates spec files from .spec.in and undoes pre-configure sed.
+    strip_kernel32_vista_imports
 
     # Redirect __acrt_iob_func → __iob_func in MinGW runtime archives
     # and inject UCRT compat stubs into libmsvcrt.a
