@@ -105,3 +105,42 @@ DWORD WINAPI VidMemLargestFree(void *lpHeap)
 {
     return 0;
 }
+
+/* --- Standard ddraw.dll exports missing from Wine's @ stub entries --- */
+
+/* Internal surface lock (DD-prefixed name expected by Windows apps).
+   DDK: HRESULT DDInternalLock(lpDDSurface, ppBits, lpRect, dwFlags) */
+long WINAPI DDInternalLock(void *lpDDSurface, void **ppBits, void *lpRect, DWORD dwFlags)
+{
+    return 0;
+}
+
+/* Internal surface unlock (DD-prefixed name).
+   DDK: HRESULT DDInternalUnlock(lpDDSurface, lpSurfaceData, dwFlags) */
+long WINAPI DDInternalUnlock(void *lpDDSurface, void *lpSurfaceData, DWORD dwFlags)
+{
+    return 0;
+}
+
+/* Acquire DirectDraw thread lock */
+void WINAPI AcquireDDThreadLock(void)
+{
+}
+
+/* Release DirectDraw thread lock */
+void WINAPI ReleaseDDThreadLock(void)
+{
+}
+
+/* Complete creation of a system memory surface */
+long WINAPI CompleteCreateSysmemSurface(void *lpDDSurface)
+{
+    return 0;
+}
+
+/* Parse unknown D3D command */
+long WINAPI D3DParseUnknownCommand(void *lpCmd, void **lpRetCmd)
+{
+    if (lpRetCmd) *lpRetCmd = lpCmd;
+    return 0x8876086A; /* D3DERR_COMMAND_UNPARSED */
+}

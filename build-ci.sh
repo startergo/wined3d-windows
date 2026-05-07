@@ -1091,11 +1091,15 @@ create_ddraw_hooks() {
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_hooks.c" dlls/ddraw/qemu3dfx_ddraw_hooks.c
     sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_hooks.c /' dlls/ddraw/Makefile.in
 
-    # Replace @ stub with @ stdcall for our hook functions in ddraw.spec
+    # Replace @ stub with @ stdcall for our hook functions in ddraw.spec.
+    # winebuild does not export @ stub entries — must use @ stdcall.
+    # Also add standard ddraw exports that Wine's spec doesn't include.
     if [ -f dlls/ddraw/ddraw.spec ]; then
         sed -i \
             -e 's/^@ stub DDHAL32_VidMemAlloc$/@ stdcall DDHAL32_VidMemAlloc(ptr long long long)/' \
             -e 's/^@ stub DDHAL32_VidMemFree$/@ stdcall DDHAL32_VidMemFree(ptr long long)/' \
+            -e 's/^@ stub DDInternalLock$/@ stdcall DDInternalLock(ptr ptr ptr long)/' \
+            -e 's/^@ stub DDInternalUnlock$/@ stdcall DDInternalUnlock(ptr ptr long)/' \
             -e 's/^@ stub DSoundHelp$/@ stdcall DSoundHelp(ptr ptr long)/' \
             -e 's/^@ stub GetNextMipMap$/@ stdcall GetNextMipMap(ptr)/' \
             -e 's/^@ stub HeapVidMemAllocAligned$/@ stdcall HeapVidMemAllocAligned(ptr long long ptr ptr)/' \
@@ -1109,6 +1113,14 @@ create_ddraw_hooks() {
             -e 's/^@ stub VidMemInit$/@ stdcall VidMemInit(long long long long long)/' \
             -e 's/^@ stub VidMemLargestFree$/@ stdcall VidMemLargestFree(ptr)/' \
             dlls/ddraw/ddraw.spec
+        # Add standard ddraw.dll exports that 3DMark2000 expects but Wine's
+        # spec doesn't define.  These are no-op stubs in our hooks file.
+        grep -q 'AcquireDDThreadLock' dlls/ddraw/ddraw.spec || cat >> dlls/ddraw/ddraw.spec << 'SPECEOF'
+@ stdcall AcquireDDThreadLock()
+@ stdcall ReleaseDDThreadLock()
+@ stdcall CompleteCreateSysmemSurface(ptr)
+@ stdcall D3DParseUnknownCommand(ptr ptr)
+SPECEOF
     fi
 }
 
