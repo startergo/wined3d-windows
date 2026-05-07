@@ -718,16 +718,8 @@ int __cdecl sprintf(char *buf, const char *fmt, ...)
 }
 
 /* --- fprintf (in our msvcrt imports but not in reference) ---
-   Forwards to msvcrt's vfprintf. */
-extern int __cdecl vfprintf(void *, const char *, __builtin_va_list);
-int __cdecl fprintf(void *f, const char *fmt, ...)
-{
-    __builtin_va_list ap; int r;
-    __builtin_va_start(ap, fmt);
-    r = vfprintf(f, fmt, ap);
-    __builtin_va_end(ap);
-    return r;
-}
+   Debug output suppressed by __wine_dbg_header stub, so no-op. */
+int __cdecl fprintf(void *f, const char *fmt, ...) { (void)f; (void)fmt; return 0; }
 
 /* --- strtoul (in our msvcrt imports but not in reference) --- */
 unsigned long __cdecl strtoul(const char *s, char **end, int base)
