@@ -169,7 +169,7 @@ UCRTEOF
     # floorf → wraps floor (double, which Win98 has).
     cat > "$tmpdir/crt_compat.c" << 'CRTCEOF'
 double __cdecl _copysign(double x, double y);
-float __cdecl copysignf(float x, float y){ double r=_copysign((double)x,(double)y; return (float)r; }
+float __cdecl copysignf(float x, float y){ return (float)_copysign((double)x,(double)y); }
 double __cdecl floor(double);
 float __cdecl floorf(float x){ return (float)floor((double)x); }
 CRTCEOF
