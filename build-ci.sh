@@ -257,6 +257,7 @@ strip_kernel32_vista_imports() {
                -e '/^@.*\bmemset\b/d' \
                -e '/^@.*\bmemmove\b/d' \
                -e '/^@.*\bmemcmp\b/d' \
+               -e '/^@.*\bmemchr\b/d' \
                -e '/^@.*\bstrlen\b/d' \
                -e '/^@.*\bstrcpy\b/d' \
                -e '/^@.*\bstrcat\b/d' \
@@ -391,7 +392,7 @@ strip_kernel32_vista_imports_wine() {
     local strip_ntdll_crt=()
     for api in _stricmp \
                sprintf vsprintf snprintf vsnprintf sscanf \
-               memcpy memset memmove memcmp \
+               memcpy memset memmove memcmp memchr \
                strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
                tolower toupper strtol qsort bsearch; do
         strip_ntdll_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
@@ -418,7 +419,8 @@ strip_kernel32_vista_imports_wine() {
                __stdio_common_vswprintf __stdio_common_vswprintf_s \
                __stdio_common_vswprintf_p __stdio_common_vsnwprintf_s \
                __stdio_common_vfwprintf __stdio_common_vfwprintf_s \
-               _fdclass _dclass _dsign _fdsign; do
+               _fdclass _dclass _dsign _fdsign \
+               _fstat32; do
         strip_ucrt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
     for lib in \
@@ -584,6 +586,30 @@ int __cdecl iscntrl(int c) { return (c >= 0 && c <= 31) || c == 127; }
 int __cdecl isgraph(int c) { return c > 32 && c < 127; }
 int __cdecl ispunct(int c) { return isgraph(c) && !isalnum(c); }
 
+/* --- Memory functions (normally from ntdll, not on Win98) --- */
+int __cdecl memcmp(const void *s1, const void *s2, unsigned int n)
+{
+    const unsigned char *a = (const unsigned char *)s1, *b = (const unsigned char *)s2;
+    unsigned int i;
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) return (int)a[i] - (int)b[i];
+    }
+    return 0;
+}
+void * __cdecl memchr(const void *s, int c, unsigned int n)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    unsigned int i;
+    for (i = 0; i < n; i++) {
+        if (p[i] == (unsigned char)c) return (void *)(p + i);
+    }
+    return (void *)0;
+}
+
+/* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) ---
+   File status with 32-bit time_t. Stub returns failure. */
+int __cdecl _fstat32(int fd, void *buf) { (void)fd; (void)buf; return -1; }
+
 /* --- __acrt_iob_func (UCRT, not in Win98 msvcrt.dll) ---
    Returns a dummy FILE slot — debug output is suppressed anyway. */
 static char _dummy_iob[96];
@@ -715,6 +741,18 @@ __asm__("\n"
     ".align 4\n"
     "__imp__ispunct:\n"
     "    .long _ispunct\n"
+    ".globl __imp__memcmp\n"
+    ".align 4\n"
+    "__imp__memcmp:\n"
+    "    .long _memcmp\n"
+    ".globl __imp__memchr\n"
+    ".align 4\n"
+    "__imp__memchr:\n"
+    "    .long _memchr\n"
+    ".globl __imp___fstat32\n"
+    ".align 4\n"
+    "__imp___fstat32:\n"
+    "    .long __fstat32\n"
     ".globl __imp___fdclass\n"
     ".align 4\n"
     "__imp___fdclass:\n"
@@ -856,9 +894,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -1009,7 +1047,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
@@ -1178,6 +1216,31 @@ WGEOF
 
     # Generate all import libs needed by wined3d/d3d9/d3d8/ddraw
     generate_import_libs
+
+    # Strip CRT functions from Wine-generated ntdll import lib.
+    # configure restores ntdll.spec from .spec.in, so sed stripping
+    # before configure doesn't stick. objcopy the generated lib instead.
+    local strip_legacy_ntdll=()
+    for api in memcmp memchr \
+               _stricmp \
+               sprintf vsprintf snprintf vsnprintf sscanf \
+               memcpy memset memmove \
+               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
+               tolower toupper strtol qsort bsearch \
+               atoi atol abs \
+               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct; do
+        strip_legacy_ntdll+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
+    for lib in dlls/ntdll/libntdll.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_legacy_ntdll_$$_$(date +%s).a"
+        if objcopy "${strip_legacy_ntdll[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped CRT from Wine-generated ntdll import lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
 
     # Build uuid/dxguid — fall back to system libs on header errors or if
     # directory doesn't exist (restructured in Wine 7+)
