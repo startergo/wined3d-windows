@@ -92,6 +92,30 @@ patch_mingw_archives() {
             for obj in *.o; do
                 objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
             done
+            # Remove CRT function objects from libgcc.a so the linker resolves
+            # them from libmsvcrt.a (import thunks → msvcrt.dll) instead.
+            # This matches the reference DLLs which import memcpy/memset/strlen
+            # etc. from msvcrt.dll rather than using static libgcc implementations.
+            local strip_objs=()
+            for obj in *; do
+                case "$obj" in
+                    # libgcc provides these as static implementations; we want
+                    # them from msvcrt.dll so they match the reference DLLs.
+                    _memcpy.o _memset.o _memmove.o _memcmp.o _memchr.o \
+                    _strlen.o _strcpy.o _strcat.o _strcmp.o _strncmp.o \
+                    _strchr.o _strrchr.o _strstr.o _strcspn.o _strnlen.o \
+                    _atoi.o _strtol.o _strtoul.o \
+                    _copysignf.o _copysign.o _floor.o _ceil.o \
+                    _fabs.o _sqrt.o _sin.o _cos.o _tan.o _atan2.o \
+                    _exp.o _log.o _pow.o _modf.o _ldexp.o _fabsf.o)
+                        strip_objs+=("$obj")
+                        ;;
+                esac
+            done
+            if [ ${#strip_objs[@]} -gt 0 ]; then
+                rm -f "${strip_objs[@]}"
+                echo "    Stripped ${#strip_objs[@]} CRT objects from $(basename "$archive")"
+            fi
             ar cr "$archive" *.o
             rm -rf "$tmpdir"
             cd "$curdir"
@@ -139,18 +163,19 @@ int __cdecl __stdio_common_vfwprintf_s(_u64 o,FILE *p,const wchar_t *f,_locale l
 UCRTEOF
     gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ucrtcompat.o" "$tmpdir/ucrtcompat.c"
     ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ucrtcompat.o"
-    # Inject floorf-only object into libgcc.a for Wine 8.x PE builds.
-    # Wine 8.x links via -static-libgcc (searches libgcc.a) but uses
-    # Wine-generated import libs, not the system libmsvcrt.a where the
-    # UCRT stubs live.  Use a separate object to avoid multiple-definition
-    # errors with __acrt_iob_func (already in both libmsvcrt.a and libgcc.a).
-    cat > "$tmpdir/floorf_compat.c" << 'FLOORFEOF'
+
+    # Inject CRT compat stubs into libgcc.a for functions not in Win98's msvcrt.dll.
+    # copysignf → wraps _copysign (double, which Win98 has).
+    # floorf → wraps floor (double, which Win98 has).
+    cat > "$tmpdir/crt_compat.c" << 'CRTCEOF'
+double __cdecl _copysign(double x, double y);
+float __cdecl copysignf(float x, float y){ double r=_copysign((double)x,(double)y; return (float)r; }
 double __cdecl floor(double);
 float __cdecl floorf(float x){ return (float)floor((double)x); }
-FLOORFEOF
-    gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/floorf_compat.o" "$tmpdir/floorf_compat.c"
+CRTCEOF
+    gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/crt_compat.o" "$tmpdir/crt_compat.c"
     for gcc_lib in /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc.a; do
-        [ -f "$gcc_lib" ] && ar rs "$gcc_lib" "$tmpdir/floorf_compat.o"
+        [ -f "$gcc_lib" ] && ar rs "$gcc_lib" "$tmpdir/crt_compat.o"
     done
 }
 
