@@ -137,6 +137,48 @@ static void test_vidmemlargestfree(void)
            "VidMemLargestFree: returns 0 for non-NULL heap");
 }
 
+/* DD-prefixed internal lock/unlock */
+static void test_ddinternallock(void)
+{
+    ASSERT(DDInternalLock(NULL, NULL, NULL, 0) == 0,
+           "DDInternalLock: returns 0");
+}
+
+static void test_ddinternalunlock(void)
+{
+    ASSERT(DDInternalUnlock(NULL, NULL, 0) == 0,
+           "DDInternalUnlock: returns 0");
+}
+
+/* Standard ddraw.dll exports */
+static void test_acquire_ddthreadlock(void)
+{
+    AcquireDDThreadLock();
+    ASSERT(1, "AcquireDDThreadLock: does not crash");
+}
+
+static void test_release_ddthreadlock(void)
+{
+    ReleaseDDThreadLock();
+    ASSERT(1, "ReleaseDDThreadLock: does not crash");
+}
+
+static void test_complete_create_sysmem_surface(void)
+{
+    ASSERT(CompleteCreateSysmemSurface(NULL) == 0,
+           "CompleteCreateSysmemSurface: returns 0");
+}
+
+static void test_d3dparseunknowncommand(void)
+{
+    void *ret = NULL;
+    long hr = D3DParseUnknownCommand((void *)0x42, &ret);
+    ASSERT(hr == 0x8876086A,
+           "D3DParseUnknownCommand: returns D3DERR_COMMAND_UNPARSED");
+    ASSERT(ret == (void *)0x42,
+           "D3DParseUnknownCommand: sets ret to input cmd");
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 int main(void)
 {
@@ -154,6 +196,12 @@ int main(void)
     test_vidmemfree();
     test_vidmeminit();
     test_vidmemlargestfree();
+    test_ddinternallock();
+    test_ddinternalunlock();
+    test_acquire_ddthreadlock();
+    test_release_ddthreadlock();
+    test_complete_create_sysmem_surface();
+    test_d3dparseunknowncommand();
 
     printf("test_ddraw_stubs: %d passed, %d failed\n",
            g_tests_passed, g_tests_failed);
