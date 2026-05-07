@@ -101,13 +101,13 @@ patch_mingw_archives() {
                 case "$obj" in
                     # libgcc provides these as static implementations; we want
                     # them from msvcrt.dll so they match the reference DLLs.
-                    _memcpy.o _memset.o _memmove.o _memcmp.o _memchr.o \
-                    _strlen.o _strcpy.o _strcat.o _strcmp.o _strncmp.o \
-                    _strchr.o _strrchr.o _strstr.o _strcspn.o _strnlen.o \
-                    _atoi.o _strtol.o _strtoul.o \
-                    _copysignf.o _copysign.o _floor.o _ceil.o \
-                    _fabs.o _sqrt.o _sin.o _cos.o _tan.o _atan2.o \
-                    _exp.o _log.o _pow.o _modf.o _ldexp.o _fabsf.o)
+                    _memcpy.o|_memset.o|_memmove.o|_memcmp.o|_memchr.o|\
+                    _strlen.o|_strcpy.o|_strcat.o|_strcmp.o|_strncmp.o|\
+                    _strchr.o|_strrchr.o|_strstr.o|_strcspn.o|_strnlen.o|\
+                    _atoi.o|_strtol.o|_strtoul.o|\
+                    _copysignf.o|_copysign.o|_floor.o|_ceil.o|\
+                    _fabs.o|_sqrt.o|_sin.o|_cos.o|_tan.o|_atan2.o|\
+                    _exp.o|_log.o|_pow.o|_modf.o|_ldexp.o|_fabsf.o)
                         strip_objs+=("$obj")
                         ;;
                 esac
