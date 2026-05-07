@@ -199,6 +199,8 @@ D3DKMTEOF
 @ stdcall wined3d_passthru(ptr)
 @ stdcall wined3d_override_cooplevel(ptr)
 @ stdcall wined3d_override_rendertarget_view(ptr)
+@ stdcall wined3d_blit_fpslimit()
+@ stdcall wined3d_flip_fpslimit()
 @ stdcall wined3d_get_gamma_ramp_3dfx(ptr ptr)
 @ stdcall wined3d_set_gamma_ramp_3dfx(ptr ptr)
 @ stdcall wined3d_set_cursor_3dfx(ptr ptr)
@@ -1060,6 +1062,59 @@ create_ddraw_hooks() {
     fi
 }
 
+# ── qemu-3dfx ddraw → wined3d passthrough bridge ───────────────────
+# Injects qemu3dfx_ddraw_passthrough.c into ddraw build and patches
+# ddraw source files to call wined3d passthrough functions at the right
+# points: init in DllMain, cooplevel in SetCooperativeLevel, blit/flip
+# FPS limiting, and RTV override.
+create_ddraw_passthrough() {
+    [ -f dlls/ddraw/Makefile.in ] || return 0
+    [ -f "$SCRIPT_DIR/qemu3dfx_ddraw_passthrough.c" ] || return 0
+
+    echo "    Injecting qemu-3dfx ddraw passthrough bridge..."
+    cp "$SCRIPT_DIR/qemu3dfx_ddraw_passthrough.c" dlls/ddraw/qemu3dfx_ddraw_passthrough.c
+    sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_passthrough.c /' dlls/ddraw/Makefile.in
+
+    # ── Patch main.c: call passthrough init from DllMain ───────────
+    if [ -f dlls/ddraw/main.c ]; then
+        # Add extern declaration before DllMain (substitute preserves portability)
+        sed -i 's/^BOOL WINAPI DllMain/extern void qemu3dfx_ddraw_passthrough_init(void);\
+\
+BOOL WINAPI DllMain/' dlls/ddraw/main.c
+        # Add init call in DLL_PROCESS_ATTACH, after DisableThreadLibraryCalls
+        sed -i 's/DisableThreadLibraryCalls(inst);/DisableThreadLibraryCalls(inst);\
+        qemu3dfx_ddraw_passthrough_init();/' dlls/ddraw/main.c
+    fi
+
+    # ── Patch ddraw.c: cooplevel override in SetCooperativeLevel ───
+    if [ -f dlls/ddraw/ddraw.c ]; then
+        # Add extern declaration after ddraw_private.h include
+        sed -i 's/#include "ddraw_private.h"/#include "ddraw_private.h"\
+extern void qemu3dfx_ddraw_cooplevel(DWORD *);/' dlls/ddraw/ddraw.c
+        # Add cooplevel override right after DDRAW_dump_cooperativelevel
+        sed -i 's/DDRAW_dump_cooperativelevel(cooplevel);/DDRAW_dump_cooperativelevel(cooplevel);\
+    qemu3dfx_ddraw_cooplevel(\&cooplevel);/' dlls/ddraw/ddraw.c
+    fi
+
+    # ── Patch surface.c: blit/flip FPS limiters + RTV override ─────
+    if [ -f dlls/ddraw/surface.c ]; then
+        # Add extern declarations after ddraw_private.h include
+        sed -i 's/#include "ddraw_private.h"/#include "ddraw_private.h"\
+extern void qemu3dfx_ddraw_blit(void);\
+extern void qemu3dfx_ddraw_flip(void);\
+extern void qemu3dfx_ddraw_rtv(void *);/' dlls/ddraw/surface.c
+        # Add blit limiter call before wined3d_texture_blt in ddraw_surface_blt
+        sed -i 's/return wined3d_texture_blt(dst_surface/qemu3dfx_ddraw_blit();\
+    return wined3d_texture_blt(dst_surface/' dlls/ddraw/surface.c
+        # Add flip limiter: match DDSCAPS_FLIP (unique to Flip function)
+        sed -i 's/\(DDSCAPS2 caps = {DDSCAPS_FLIP.*\)/\1\
+    qemu3dfx_ddraw_flip();/' dlls/ddraw/surface.c
+        # Add RTV override after getting rendertarget view in Flip
+        sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\
+    qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c
+    fi
+}
+
 # ── Patch DLL imports: ucrtbase.dll → msvcrt.dll ────────────────────
 # Post-collection safety net: binary-patch any remaining ucrtbase imports.
 # "ucrtbase.dll\0" = 14 bytes; "msvcrt.dll\0\0\0" = 14 bytes — same length.
@@ -1116,6 +1171,9 @@ build_modern() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # qemu-3dfx ddraw → wined3d passthrough bridge
+    create_ddraw_passthrough
 
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
@@ -1217,6 +1275,9 @@ build_legacy() {
 
     # qemu-3dfx ddraw HAL VidMem stubs
     create_ddraw_hooks
+
+    # qemu-3dfx ddraw → wined3d passthrough bridge
+    create_ddraw_passthrough
 
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat

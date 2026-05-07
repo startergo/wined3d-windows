@@ -142,6 +142,23 @@ void WINAPI wined3d_override_rendertarget_view(void *view_ptr)
     }
 }
 
+/* ── Blit / Flip frame rate limiting ────────────────────────────────── */
+
+static DWORD blit_frame_count;
+static DWORD flip_frame_count;
+
+BOOL WINAPI wined3d_blit_fpslimit(void)
+{
+    blit_frame_count++;
+    return TRUE;
+}
+
+BOOL WINAPI wined3d_flip_fpslimit(void)
+{
+    flip_frame_count++;
+    return TRUE;
+}
+
 /* ── Registry config keys (queried by Wine D3D initialization) ────── */
 
 const char qemu3dfx_hal_key[] = "D3D1Hal3Dfx";
