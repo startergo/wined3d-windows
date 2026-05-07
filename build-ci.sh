@@ -367,17 +367,6 @@ strip_kernel32_vista_imports_wine() {
                __acrt_iob_func; do
         strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
-    # Basic CRT that Win98 ntdll HAS — only strip from ucrtbase/msvcrt
-    # to avoid multiple-definition with our stubs. Do NOT strip from ntdll.
-    local strip_crtlib=()
-    for api in _stricmp \
-               sprintf vsprintf snprintf vsnprintf sscanf \
-               memcpy memset memmove memcmp \
-               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
-               tolower toupper strtol qsort bsearch; do
-        strip_crtlib+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
-    done
-
     # Vista+ APIs + stub CRT: strip from all libs (kernel32, ntdll, ucrtbase, msvcrt)
     for lib in \
         dlls/kernel32/i386-windows/libkernel32.a \
@@ -397,36 +386,53 @@ strip_kernel32_vista_imports_wine() {
             rm -f "$tmp"
         fi
     done
-    # Basic CRT: strip from ucrtbase/msvcrt only (avoid multiple-def with our stubs)
+    # Basic CRT: strip from ntdll only — ucrtbase provides these and is
+    # binary-patched to msvcrt post-build. Avoids multiple-definition errors.
+    local strip_ntdll_crt=()
+    for api in _stricmp \
+               sprintf vsprintf snprintf vsnprintf sscanf \
+               memcpy memset memmove memcmp \
+               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
+               tolower toupper strtol qsort bsearch; do
+        strip_ntdll_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
     for lib in \
-        dlls/ucrtbase/i386-windows/libucrtbase.a \
-        dlls/ucrtbase/libucrtbase.a \
-        dlls/msvcrt/i386-windows/libmsvcrt.a \
-        dlls/msvcrt/libmsvcrt.a; do
+        dlls/ntdll/i386-windows/libntdll.a \
+        dlls/ntdll/libntdll.a; do
         [ -f "$lib" ] || continue
-        local tmp="${TMPDIR:-/tmp}/strip_crtlib_$$_$(date +%s).a"
-        if objcopy "${strip_crtlib[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+        local tmp="${TMPDIR:-/tmp}/strip_ntdll_crt_$$_$(date +%s).a"
+        if objcopy "${strip_ntdll_crt[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
-            echo "    Stripped CRT symbols from Wine $lib"
+            echo "    Stripped basic CRT from Wine ntdll $lib"
         else
             rm -f "$tmp"
         fi
     done
-
-    # Replace ucrtbase import lib with empty archive. Wine regenerates it
-    # from ucrtbase.spec (restored by configure from .spec.in), so objcopy
-    # stripping is futile. An empty archive prevents CRT conflicts with ntdll.
-    local tmpdir="${TMPDIR:-/tmp}"
-    echo "/* empty */" | gcc -c -x c - -o "$tmpdir/dummy_ucrtbase.o" 2>/dev/null
+    # UCRT-specific functions: strip from ucrtbase (not in msvcrt.dll on Win98).
+    # kernel32_compat.c provides local no-op stubs.
+    local strip_ucrt=()
+    for api in __stdio_common_vsprintf __stdio_common_vsprintf_s \
+               __stdio_common_vsprintf_p __stdio_common_vsnprintf_s \
+               __stdio_common_vfprintf __stdio_common_vfprintf_s \
+               __stdio_common_vfscanf __stdio_common_vsscanf \
+               __stdio_common_vswprintf __stdio_common_vswprintf_s \
+               __stdio_common_vswprintf_p __stdio_common_vsnwprintf_s \
+               __stdio_common_vfwprintf __stdio_common_vfwprintf_s \
+               _fdclass _dclass _dsign _fdsign; do
+        strip_ucrt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
     for lib in \
         dlls/ucrtbase/i386-windows/libucrtbase.a \
         dlls/ucrtbase/libucrtbase.a; do
         [ -f "$lib" ] || continue
-        rm -f "$lib"
-        ar cr "$lib" "$tmpdir/dummy_ucrtbase.o"
-        echo "    Replaced $lib with empty archive"
+        local tmp="${TMPDIR:-/tmp}/strip_ucrt_$$_$(date +%s).a"
+        if objcopy "${strip_ucrt[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped UCRT-specific symbols from Wine ucrtbase $lib"
+        else
+            rm -f "$tmp"
+        fi
     done
-    rm -f "$tmpdir/dummy_ucrtbase.o"
 }
 
 # ── Win98 compat stubs for Vista+/Win2000+ APIs ────────────────────
@@ -583,6 +589,21 @@ int __cdecl ispunct(int c) { return isgraph(c) && !isalnum(c); }
 static char _dummy_iob[96];
 void * __cdecl __acrt_iob_func(unsigned int i) { return (i < 3) ? _dummy_iob + i * 32 : 0; }
 
+/* --- UCRT-specific floating-point classification (not in msvcrt.dll) ---
+   Used by vkd3d (Vulkan shader compiler). No-op stubs. */
+int __cdecl _fdclass(float x) { (void)x; return 0; }
+int __cdecl _dclass(double x) { (void)x; return 0; }
+int __cdecl _dsign(double x) { (void)x; return 0; }
+int __cdecl _fdsign(float x) { (void)x; return 0; }
+
+/* --- UCRT-specific printf/scanf (not in msvcrt.dll) ---
+   Used by vkd3d and Wine's CRT. No-op stubs. */
+typedef unsigned long long _u64;
+typedef void *_locale_t;
+int __cdecl __stdio_common_vsprintf(_u64 o, char *b, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)b;(void)n;(void)f;(void)l;(void)a; return 0; }
+int __cdecl __stdio_common_vfprintf(_u64 o, void *p, const char *f, _locale_t l, void *a) { (void)o;(void)p;(void)f;(void)l;(void)a; return 0; }
+int __cdecl __stdio_common_vsscanf(_u64 o, const char *s, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)s;(void)n;(void)f;(void)l;(void)a; return -1; }
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__GetModuleHandleExW@12\n"
@@ -694,6 +715,34 @@ __asm__("\n"
     ".align 4\n"
     "__imp__ispunct:\n"
     "    .long _ispunct\n"
+    ".globl __imp___fdclass\n"
+    ".align 4\n"
+    "__imp___fdclass:\n"
+    "    .long __fdclass\n"
+    ".globl __imp___dclass\n"
+    ".align 4\n"
+    "__imp___dclass:\n"
+    "    .long __dclass\n"
+    ".globl __imp___dsign\n"
+    ".align 4\n"
+    "__imp___dsign:\n"
+    "    .long __dsign\n"
+    ".globl __imp___fdsign\n"
+    ".align 4\n"
+    "__imp___fdsign:\n"
+    "    .long __fdsign\n"
+    ".globl __imp____stdio_common_vsprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsprintf:\n"
+    "    .long ___stdio_common_vsprintf\n"
+    ".globl __imp____stdio_common_vfprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vfprintf:\n"
+    "    .long ___stdio_common_vfprintf\n"
+    ".globl __imp____stdio_common_vsscanf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsscanf:\n"
+    "    .long ___stdio_common_vsscanf\n"
     ".text\n"
 );
 K32EOF
@@ -783,7 +832,6 @@ build_modern() {
             -e 's/^RC_SRCS\s*=.*/RC_SRCS =/' \
             dlls/ucrtbase/Makefile.in
     fi
-    : > dlls/ucrtbase/ucrtbase.spec 2>/dev/null || true
 
     # D3DKMT stubs — prevent Vista+-only static imports from gdi32.dll
     create_d3dkmt_stubs
@@ -808,9 +856,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -961,7 +1009,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
