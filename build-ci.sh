@@ -412,6 +412,21 @@ strip_kernel32_vista_imports_wine() {
             rm -f "$tmp"
         fi
     done
+
+    # Replace ucrtbase import lib with empty archive. Wine regenerates it
+    # from ucrtbase.spec (restored by configure from .spec.in), so objcopy
+    # stripping is futile. An empty archive prevents CRT conflicts with ntdll.
+    local tmpdir="${TMPDIR:-/tmp}"
+    echo "/* empty */" | gcc -c -x c - -o "$tmpdir/dummy_ucrtbase.o" 2>/dev/null
+    for lib in \
+        dlls/ucrtbase/i386-windows/libucrtbase.a \
+        dlls/ucrtbase/libucrtbase.a; do
+        [ -f "$lib" ] || continue
+        rm -f "$lib"
+        ar cr "$lib" "$tmpdir/dummy_ucrtbase.o"
+        echo "    Replaced $lib with empty archive"
+    done
+    rm -f "$tmpdir/dummy_ucrtbase.o"
 }
 
 # ── Win98 compat stubs for Vista+/Win2000+ APIs ────────────────────
