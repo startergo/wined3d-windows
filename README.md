@@ -75,11 +75,15 @@ Injected via `qemu3dfx_hooks.c`:
 Embedded strings: `QEMU` debug channel, registry keys `D3D1Hal3Dfx` /
 `D3D1EnumHalLast`, WGL extension strings.
 
-### ddraw.dll — 14 HAL stubs + passthrough bridge
+### ddraw.dll — 20 HAL stubs + standard exports + passthrough bridge
 
-**HAL stubs** via `qemu3dfx_ddraw_hooks.c`. No-op stubs — the passthrough
-wrapper handles actual video memory management. Signatures verified against
-NT 4.0 and XP SP1 DDK source code:
+**HAL stubs and standard exports** via `qemu3dfx_ddraw_hooks.c`. No-op
+stubs — the passthrough wrapper handles actual video memory management.
+Signatures verified against NT 4.0 and XP SP1 DDK source code.
+
+Wine's `@ stub` entries are not exported by winebuild, so the build
+patches them to `@ stdcall`. Standard Windows ddraw.dll exports not in
+Wine's spec are appended during the build.
 
 | Export | Source |
 |--------|--------|
@@ -94,9 +98,15 @@ NT 4.0 and XP SP1 DDK source code:
 | `HeapVidMemAllocAligned` | dmemmgr.h |
 | `InternalLock` | ddrawpr.h |
 | `InternalUnlock` | ddrawpr.h |
+| `DDInternalLock` | ddrawpr.h (DD-prefixed name) |
+| `DDInternalUnlock` | ddrawpr.h (DD-prefixed name) |
 | `GetNextMipMap` | ddrawi.h |
 | `LateAllocateSurfaceMem` | ddrawi.h |
 | `DSoundHelp` | dddefwp.c (NT5) |
+| `AcquireDDThreadLock` | Standard ddraw export |
+| `ReleaseDDThreadLock` | Standard ddraw export |
+| `CompleteCreateSysmemSurface` | Standard ddraw export |
+| `D3DParseUnknownCommand` | Standard ddraw export |
 
 **Passthrough bridge** via `qemu3dfx_ddraw_passthrough.c`. Bridges ddraw
 to wined3d passthrough functions at key lifecycle points:
@@ -139,10 +149,11 @@ Windows 98 SE without missing-export errors:
 | Issue | Versions Affected | Fix |
 |-------|-------------------|-----|
 | `_initterm_e` missing from msvcrt.dll | 4–5 | Local CRT stub + import lib stripping |
-| `GetModuleHandleExW` missing from kernel32.dll | 6–7 | Vista+ import lib stripping |
+| `GetModuleHandleExW` missing from kernel32.dll | 6–8 | Source-level `#define` redirect to `wine_k32compat_GMHEW` |
 | `__stdio_common_*` UCRT functions | 6–7 | UCRT compat stubs + import lib stripping |
 | ntdll.dll import leaks | 6–7 | CRT stripping from Wine import libs |
 | Missing `wined3d_enum_hal_last` call | 1–3 | Passthrough bridge init call |
+| Missing standard ddraw exports | 1–8 | `@ stub` → `@ stdcall` + append spec entries |
 | Flip sed pattern mismatch (DDSCAPS vs DDSCAPS2) | 6–8 | Regex flexibility: `DDSCAPS2\?` |
 | Blit API change (texture_blt → device_context_blt) | 7–8 | Dual sed pattern fallback |
 

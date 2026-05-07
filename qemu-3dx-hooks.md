@@ -218,12 +218,18 @@ calls are zero-cost until a real libwine with active debug channels is used.
 
 ---
 
-## ddraw.dll Custom Exports (14 functions)
+## ddraw.dll Custom Exports (20 functions)
 
 All exported from `qemu3dfx_ddraw_hooks.c`, injected into `dlls/ddraw/`.
 These are no-op stubs — the passthrough wrapper handles actual video memory
 management. Function signatures verified against NT 4.0 and XP SP1 DDK
 source code (`dmemmgr.h`, `ddrawi.h`, `ddrawpr.h`).
+
+Note: Wine's ddraw.spec defines many of these as `@ stub` entries, but
+winebuild does not export `@ stub` entries in the PE export table. The
+build patches them to `@ stdcall` so they appear as real exports. Standard
+Windows ddraw.dll exports (AcquireDDThreadLock, D3DParseUnknownCommand,
+etc.) that are not in Wine's spec at all are appended during the build.
 
 ### Video Memory Management (from dmemmgr.h)
 
@@ -305,6 +311,43 @@ long WINAPI LateAllocateSurfaceMem(void *lpSurface, DWORD dwAllocType,
 long WINAPI DSoundHelp(void *hWnd, void *lpWndProc, DWORD pid)
 {
     return 0;
+}
+```
+
+### Standard Windows ddraw.dll Exports
+
+These 6 exports are present in the reference ddraw.dll and expected by
+applications like 3DMark2000. Wine's spec file defines DDInternalLock/
+DDInternalUnlock as `@ stub` (not exported by winebuild) and doesn't
+include the other four at all. All are patched to `@ stdcall` or appended
+to the spec during the build.
+
+```c
+// Internal surface lock (DD-prefixed name expected by Windows).
+// Wine's spec also has InternalLock (without DD prefix).
+long WINAPI DDInternalLock(void *surface, void **bits, void *rect, DWORD flags)
+{
+    return 0;
+}
+
+// Internal surface unlock (DD-prefixed name).
+long WINAPI DDInternalUnlock(void *surface, void *data, DWORD flags)
+{
+    return 0;
+}
+
+// Thread safety — no-op (Wine handles locking internally)
+void WINAPI AcquireDDThreadLock(void) { }
+void WINAPI ReleaseDDThreadLock(void) { }
+
+// System memory surface creation — no-op
+long WINAPI CompleteCreateSysmemSurface(void *surface) { return 0; }
+
+// D3D command parser — returns D3DERR_COMMAND_UNPARSED
+long WINAPI D3DParseUnknownCommand(void *cmd, void **ret)
+{
+    if (ret) *ret = cmd;
+    return 0x8876086A; /* D3DERR_COMMAND_UNPARSED */
 }
 ```
 
@@ -392,13 +435,21 @@ instead of importing from kernel32/ntdll/msvcrt which lack these on Win98.
 
 ### Vista+ Kernel32 Stubs
 
-#### `GetModuleHandleExW()` — Vista+ → Win95+ fallback
+#### `wine_k32compat_GMHEW()` — GetModuleHandleExW source-level redirect
 
-Uses `VirtualQuery` (Win95+) for `FROM_ADDRESS` flag, `GetModuleHandleA`
-for name lookups. When name is NULL, returns `0x400000` (default image base).
+Wine 6–8 source code (`ddraw/main.c`, `wined3d/cs.c`) calls
+`GetModuleHandleExW` directly. `__declspec(dllimport)` from `<winbase.h>`
+forces the linker to create a kernel32.dll import table entry even when
+we provide a local stub with `__imp__` pointer.
+
+Fix: the build injects `#define GetModuleHandleExW wine_k32compat_GMHEW`
+at the top of Wine source files that call it. This eliminates all
+references to the `GetModuleHandleExW` symbol name, so no import table
+entry is created. The `__imp__wine_k32compat_GMHEW@12` asm pointer
+replaces the old `__imp__GetModuleHandleExW@12`.
 
 ```c
-BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
+BOOL __stdcall wine_k32compat_GMHEW(DWORD flags, LPCWSTR name, HMODULE *module)
 {
     if (!module) return 0;
     if (flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
@@ -415,7 +466,7 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
 }
 ```
 
-Used by: `wined3d/cs.c` (Wine 4–8), `ddraw/main.c` (Wine 4–8).
+Used by: `wined3d/cs.c` (Wine 6–8), `ddraw/main.c` (Wine 6–8).
 
 #### `GlobalMemoryStatusEx()` — Win2000+ → Win95+ fallback
 
@@ -522,9 +573,9 @@ Each stub is accompanied by an inline asm `.rdata` pointer so
 
 ```asm
 .section .rdata,"dr"
-__imp___initterm:                    .long _initterm
-__imp___initterm_e:                  .long _initterm_e
-__imp__GetModuleHandleExW@12:        .long _GetModuleHandleExW@12
+__imp___initterm:                    .long __initterm
+__imp___initterm_e:                  .long __initterm_e
+__imp__wine_k32compat_GMHEW@12:     .long _wine_k32compat_GMHEW@12
 __imp__GlobalMemoryStatusEx@4:       .long _GlobalMemoryStatusEx@4
 __imp__RtlIsCriticalSectionLockedByThread@4:
                                      .long _RtlIsCriticalSectionLockedByThread@4
@@ -763,6 +814,9 @@ ddraw.dll ──── passthrough bridge (qemu3dfx_ddraw_passthrough.c)
     |
     |        ──── VidMem HAL stubs (qemu3dfx_ddraw_hooks.c)
     |           DDHAL32_VidMemAlloc, VidMemFree, VidMemInit, etc.
+    |           DDInternalLock, DDInternalUnlock, AcquireDDThreadLock,
+    |           ReleaseDDThreadLock, CompleteCreateSysmemSurface,
+    |           D3DParseUnknownCommand
     |           (return 0/NULL — passthrough wrapper handles real alloc)
     |
     v
@@ -818,17 +872,37 @@ also imported `_initterm` from msvcrt.dll. But MinGW CRT startup code
 calls `_initterm_e` which Win98's msvcrt.dll lacks. Fixed by adding
 local stubs + stripping from import libs.
 
-### Wine 6.0.4–7.0.2: Missing `GetModuleHandleExW`
+### Wine 6.0.4–7.0.2: `GetModuleHandleExW` import leak
 
 Originals don't import `GetModuleHandleExW` from kernel32 (it doesn't
-exist on Win98). Our builds leaked this import through Wine-generated
-kernel32 import libs. Fixed by stripping Vista+ APIs from legacy
-kernel32 import lib post-configure.
+exist on Win98). Our builds leaked this import because Wine 6-7's
+`ddraw/main.c` and `wined3d/cs.c` call `GetModuleHandleExW` directly.
+`__declspec(dllimport)` from `<winbase.h>` forced the linker to create
+a kernel32.dll import entry even with local stubs and import lib stripping.
+
+Fixed by source-level redirect: `#define GetModuleHandleExW wine_k32compat_GMHEW`
+injected at the top of Wine source files that call it. This eliminates
+all references to the `GetModuleHandleExW` symbol name.
 
 ### Wine 8.0.2: Crash (page fault in KERNEL32.DLL)
 
 Under investigation. Likely a remaining Vista+ import or incompatible
 CRT function leaking through the modern PE build system.
+
+### Missing ddraw.dll Standard Exports (All Versions)
+
+Our builds were missing 6 standard Windows ddraw.dll exports that the
+reference DLL provides. Root cause: winebuild does not export `@ stub`
+entries from the spec file — only `@ stdcall` entries get exported.
+
+Missing exports and their fix:
+- `DDInternalLock` / `DDInternalUnlock` — changed from `@ stub` to `@ stdcall` in spec
+- `AcquireDDThreadLock` / `ReleaseDDThreadLock` — appended to spec (not in Wine's spec)
+- `CompleteCreateSysmemSurface` — appended to spec
+- `D3DParseUnknownCommand` — appended to spec
+
+All are no-op stubs in `qemu3dfx_ddraw_hooks.c`. Without these, 3DMark2000
+fails to start because it depends on standard ddraw.dll export ordinals.
 
 ### CRT Import Profile Differences (Wine 1–3)
 
