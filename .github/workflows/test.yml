@@ -19,8 +19,5 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: sudo apt-get install -y --no-install-recommends gcc make
-
       - name: Build and run tests
         run: make test

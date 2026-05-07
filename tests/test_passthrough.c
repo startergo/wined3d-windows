@@ -40,7 +40,7 @@ BOOL WINAPI wined3d_enum_hal_last(void)
     return TRUE;
 }
 
-/* Declared as void* in passthrough.c to match the original qemu-3dfx
+/* Declared as void* in passthrough.c to match the original QEMU-3dfx
    ABI; returns NULL (stub). */
 void *WINAPI wined3d_surface_ddheap(void)
 {
