@@ -586,7 +586,28 @@ int __cdecl iscntrl(int c) { return (c >= 0 && c <= 31) || c == 127; }
 int __cdecl isgraph(int c) { return c > 32 && c < 127; }
 int __cdecl ispunct(int c) { return isgraph(c) && !isalnum(c); }
 
-/* --- Memory functions (normally from ntdll, not on Win98) --- */
+/* --- Memory/string functions (normally from ntdll, not on Win98) ---
+   Real implementations so the linker resolves them from this object
+   first and never pulls conflicting definitions from libntdll.a /
+   libmsvcrt.a. */
+void * __cdecl memcpy(void *d, const void *s, unsigned int n)
+{
+    char *dst = (char *)d; const char *src = (const char *)s;
+    unsigned int i; for (i = 0; i < n; i++) dst[i] = src[i]; return d;
+}
+void * __cdecl memset(void *d, int c, unsigned int n)
+{
+    char *dst = (char *)d; unsigned int i;
+    for (i = 0; i < n; i++) dst[i] = (char)c; return d;
+}
+void * __cdecl memmove(void *d, const void *s, unsigned int n)
+{
+    char *dst = (char *)d; const char *src = (const char *)s;
+    unsigned int i;
+    if (dst < src) { for (i = 0; i < n; i++) dst[i] = src[i]; }
+    else { for (i = n; i > 0; i--) dst[i-1] = src[i-1]; }
+    return d;
+}
 int __cdecl memcmp(const void *s1, const void *s2, unsigned int n)
 {
     const unsigned char *a = (const unsigned char *)s1, *b = (const unsigned char *)s2;
@@ -604,6 +625,46 @@ void * __cdecl memchr(const void *s, int c, unsigned int n)
         if (p[i] == (unsigned char)c) return (void *)(p + i);
     }
     return (void *)0;
+}
+unsigned int __cdecl strlen(const char *s)
+{
+    unsigned int n = 0; while (s[n]) n++; return n;
+}
+char * __cdecl strcpy(char *d, const char *s)
+{
+    char *r = d; while ((*d++ = *s++)); return r;
+}
+char * __cdecl strcat(char *d, const char *s)
+{
+    char *r = d; while (*d) d++; while ((*d++ = *s++)); return r;
+}
+int __cdecl strcmp(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *(const unsigned char *)a - *(const unsigned char *)b;
+}
+int __cdecl strncmp(const char *a, const char *b, unsigned int n)
+{
+    if (!n) return 0;
+    while (n-- > 1 && *a && *a == *b) { a++; b++; }
+    return *(const unsigned char *)a - *(const unsigned char *)b;
+}
+char * __cdecl strchr(const char *s, int c)
+{
+    while (*s) { if (*s == (char)c) return (char *)s; s++; }
+    return c == 0 ? (char *)s : (char *)0;
+}
+char * __cdecl strrchr(const char *s, int c)
+{
+    char *r = (char *)0; do { if (*s == (char)c) r = (char *)s; } while (*s++);
+    return r;
+}
+char * __cdecl strstr(const char *h, const char *n)
+{
+    unsigned int nlen; if (!n[0]) return (char *)h;
+    nlen = 0; while (n[nlen]) nlen++;
+    for (; *h; h++) { unsigned int i; for (i = 0; i < nlen && h[i] == n[i]; i++);
+        if (i == nlen) return (char *)h; } return (char *)0;
 }
 
 /* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) ---
@@ -741,6 +802,18 @@ __asm__("\n"
     ".align 4\n"
     "__imp__ispunct:\n"
     "    .long _ispunct\n"
+    ".globl __imp__memcpy\n"
+    ".align 4\n"
+    "__imp__memcpy:\n"
+    "    .long _memcpy\n"
+    ".globl __imp__memset\n"
+    ".align 4\n"
+    "__imp__memset:\n"
+    "    .long _memset\n"
+    ".globl __imp__memmove\n"
+    ".align 4\n"
+    "__imp__memmove:\n"
+    "    .long _memmove\n"
     ".globl __imp__memcmp\n"
     ".align 4\n"
     "__imp__memcmp:\n"
@@ -749,6 +822,38 @@ __asm__("\n"
     ".align 4\n"
     "__imp__memchr:\n"
     "    .long _memchr\n"
+    ".globl __imp__strlen\n"
+    ".align 4\n"
+    "__imp__strlen:\n"
+    "    .long _strlen\n"
+    ".globl __imp__strcpy\n"
+    ".align 4\n"
+    "__imp__strcpy:\n"
+    "    .long _strcpy\n"
+    ".globl __imp__strcat\n"
+    ".align 4\n"
+    "__imp__strcat:\n"
+    "    .long _strcat\n"
+    ".globl __imp__strcmp\n"
+    ".align 4\n"
+    "__imp__strcmp:\n"
+    "    .long _strcmp\n"
+    ".globl __imp__strncmp\n"
+    ".align 4\n"
+    "__imp__strncmp:\n"
+    "    .long _strncmp\n"
+    ".globl __imp__strchr\n"
+    ".align 4\n"
+    "__imp__strchr:\n"
+    "    .long _strchr\n"
+    ".globl __imp__strrchr\n"
+    ".align 4\n"
+    "__imp__strrchr:\n"
+    "    .long _strrchr\n"
+    ".globl __imp__strstr\n"
+    ".align 4\n"
+    "__imp__strstr:\n"
+    "    .long _strstr\n"
     ".globl __imp___fstat32\n"
     ".align 4\n"
     "__imp___fstat32:\n"
@@ -891,9 +996,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,_fstat32,__imp___fstat32" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,_fstat32,__imp___fstat32"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -1048,7 +1153,7 @@ if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
     # Exclude GetModuleHandleExW stub from DLL exports so it doesn't
     # leak into import libs (causes ddraw.dll export errors).
-    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,_fstat32,__imp___fstat32)
+    args+=(-Xlinker --exclude-symbols -Xlinker _GetModuleHandleExW@12,__imp__GetModuleHandleExW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_strnicmp,__imp___strnicmp,_vsnprintf,__imp___vsnprintf,_snprintf,__imp___snprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,_fstat32,__imp___fstat32)
     # Belt-and-suspenders: force static linking for any remaining -lwine
     # references that may have been injected by winebuild/winegcc internals.
     new_args=()
