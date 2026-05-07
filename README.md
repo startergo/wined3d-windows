@@ -149,13 +149,14 @@ Windows 98 SE without missing-export errors:
 | Issue | Versions Affected | Fix |
 |-------|-------------------|-----|
 | `_initterm_e` missing from msvcrt.dll | 4–5 | Local CRT stub + import lib stripping |
-| `GetModuleHandleExW` missing from kernel32.dll | 6–8 | Source-level `#define` redirect to `wine_k32compat_GMHEW` |
+| `GetModuleHandleExW` missing from kernel32.dll | 6–8 | CFLAGS `-D` redirect + file-level `#define` to `wine_k32compat_GMHEW` |
 | `__stdio_common_*` UCRT functions | 6–7 | UCRT compat stubs + import lib stripping |
 | ntdll.dll import leaks | 6–7 | CRT stripping from Wine import libs |
 | Missing `wined3d_enum_hal_last` call | 1–3 | Passthrough bridge init call |
 | Missing standard ddraw exports | 1–8 | `@ stub` → `@ stdcall` + append spec entries |
 | Flip sed pattern mismatch (DDSCAPS vs DDSCAPS2) | 6–8 | Regex flexibility: `DDSCAPS2\?` |
 | Blit API change (texture_blt → device_context_blt) | 7–8 | Dual sed pattern fallback |
+| CRT builtins replacing msvcrt imports | 1–8 | `-fno-builtin` in CFLAGS forces external CRT resolution |
 
 ## Quick Start
 
