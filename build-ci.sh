@@ -1446,15 +1446,6 @@ build_legacy() {
     make "${makefiles[@]}"
 
     make -j"$NPROC" libs/port 2>/dev/null || :
-    # Replace libwine_port.a with an empty archive. Wine's portable C library
-    # provides memcpy/memmove/strcasecmp etc. as local implementations which
-    # shadow the msvcrt.dll imports. ReactOS doesn't link libwine_port at all.
-    # CRT resolves from libmsvcrt.a (import thunks → msvcrt.dll) instead.
-    if [ -f libs/port/libwine_port.a ]; then
-        rm libs/port/libwine_port.a
-        ar cr libs/port/libwine_port.a
-        echo "    Replaced libwine_port.a with empty archive"
-    fi
     # Build libs/wine for libwine_static.a (needed by wrc).  We delete the
     # shared DLL files afterwards and replace libwine.a with a stub.
     [ -d libs/wine ] && make -j"$NPROC" -C libs/wine 2>/dev/null || :
@@ -1539,6 +1530,17 @@ WGEOF
     for tool in winebuild wrc widl; do
         make -j"$NPROC" -C "tools/$tool"
     done
+
+    # Replace libwine_port.a with an empty archive after tools are built.
+    # Wine's portable C library provides memcpy/memmove/strcasecmp etc. as
+    # local implementations which shadow the msvcrt.dll imports. ReactOS
+    # doesn't link libwine_port at all — CRT resolves from libmsvcrt.a
+    # (import thunks → msvcrt.dll) instead.
+    if [ -f libs/port/libwine_port.a ]; then
+        rm libs/port/libwine_port.a
+        ar cr libs/port/libwine_port.a
+        echo "    Replaced libwine_port.a with empty archive"
+    fi
 
     # Force unconditional rebuild of winegcc from patched source.
     # -B flag tells make to rebuild all targets regardless of timestamps.
