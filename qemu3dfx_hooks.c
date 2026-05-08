@@ -84,9 +84,9 @@ BOOL WINAPI wined3d_passthru(BOOL *enabled)
 
 void WINAPI wined3d_override_cooplevel(DWORD *cooplevel)
 {
-    if (override_counter == (DWORD)-1) return;
-
     DWORD flags = 0;
+
+    if (override_counter == (DWORD)-1) return;
     if (override_trigger != (DWORD)-1)
         flags = 0x10;  /* DDSCL_EXCLUSIVE */
 
@@ -194,7 +194,8 @@ static void load_wgl_3dfx_extensions(void)
     p_wglGetDeviceGammaRamp3DFX = (PFN_wglGetDeviceGammaRamp3DFX)pGetProc("wglGetDeviceGammaRamp3DFX");
     p_wglSetDeviceGammaRamp3DFX = (PFN_wglSetDeviceGammaRamp3DFX)pGetProc("wglSetDeviceGammaRamp3DFX");
     p_wglSetDeviceCursor3DFX = (PFN_wglSetDeviceCursor3DFX)pGetProc("wglSetDeviceCursor3DFX");
-    QEMU_DBG(__WINE_DBCL_TRACE, "WGL 3DFX extensions %s\n",
+    QEMU_DBG(__WINE_DBCL_TRACE, "WGL extension %s %s\n",
+             wgl_3dfx_gamma_control,
              p_wglGetDeviceGammaRamp3DFX ? "loaded" : "not available");
 }
 
