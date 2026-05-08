@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src
-          key: wine-src-${{ matrix.wine_version }}-v22
+          key: wine-src-${{ matrix.wine_version }}-v23
 
       - name: Build Wine ${{ matrix.wine_version }}
         shell: msys2 {0}

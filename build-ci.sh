@@ -624,6 +624,31 @@ typedef void *HANDLE;
 typedef const unsigned short *PCWSTR;
 HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescription) { return 0; }
 
+/* --- ntdll CRT stubs (not available on Win98 ntdll.dll) ---
+   Wine 6+ libwinecrt0.a uses __declspec(dllimport) for these, creating
+   __imp__ references. No-op stubs — debug output is suppressed by
+   __wine_dbg_get_channel_flags returning 0. */
+int __cdecl _strnicmp(const char *s1, const char *s2, unsigned int n)
+{
+    if(!n) return 0;
+    for(; n--; s1++, s2++) {
+        unsigned char c1 = (unsigned char)*s1, c2 = (unsigned char)*s2;
+        if(c1 >= 'A' && c1 <= 'Z') c1 += 32;
+        if(c2 >= 'A' && c2 <= 'Z') c2 += 32;
+        if(c1 != c2) return (int)c1 - (int)c2;
+        if(!c1) return 0;
+    }
+    return 0;
+}
+int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, ...)
+{
+    return 0;
+}
+int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
+{
+    return 0;
+}
+
 /* --- __lc_codepage (msvcrt data variable, not in reference imports) --- */
 unsigned int __lc_codepage = 437;
 
@@ -719,6 +744,18 @@ __asm__("\n"
     ".align 4\n"
     "__imp__SetThreadDescription@8:\n"
     "    .long _SetThreadDescription@8\n"
+    ".globl __imp___strnicmp\n"
+    ".align 4\n"
+    "__imp___strnicmp:\n"
+    "    .long __strnicmp\n"
+    ".globl __imp___vsnprintf\n"
+    ".align 4\n"
+    "__imp___vsnprintf:\n"
+    "    .long __vsnprintf\n"
+    ".globl __imp___snprintf\n"
+    ".align 4\n"
+    "__imp___snprintf:\n"
+    "    .long __snprintf\n"
     ".globl __imp____acrt_iob_func\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
