@@ -213,8 +213,9 @@ D3DKMTEOF
         echo "    Injecting qemu-3dfx passthrough hooks..."
         cp "$SCRIPT_DIR/qemu3dfx_hooks.c" dlls/wined3d/qemu3dfx_hooks.c
         sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_hooks.c /' dlls/wined3d/Makefile.in
-        # Add exports to spec file
-        if [ -f dlls/wined3d/wined3d.spec ]; then
+        # Add exports to spec file (idempotent — skip if already present)
+        if [ -f dlls/wined3d/wined3d.spec ] && \
+           ! grep -q 'wined3d_hal_3dfx' dlls/wined3d/wined3d.spec; then
             cat >> dlls/wined3d/wined3d.spec << 'SPECEOF'
 
 # qemu-3dfx passthrough hooks
@@ -1531,7 +1532,16 @@ WGEOF
         make -j"$NPROC" -C "tools/$tool"
     done
 
-    # Replace libwine_port.a with an empty archive after tools are built.
+    # Force unconditional rebuild of winegcc from patched source.
+    # -B flag tells make to rebuild all targets regardless of timestamps.
+    echo "    Rebuilding winegcc from patched source..."
+    make -B -C tools/winegcc
+    # Verify the binary exists
+    ls -la tools/winegcc/winegcc* 2>/dev/null || echo "    WARNING: winegcc binary not found!"
+    make -C include 2>/dev/null || :
+    make tools/make_xftmpl 2>/dev/null || :
+
+    # Replace libwine_port.a with an empty archive after ALL tools are built.
     # Wine's portable C library provides memcpy/memmove/strcasecmp etc. as
     # local implementations which shadow the msvcrt.dll imports. ReactOS
     # doesn't link libwine_port at all — CRT resolves from libmsvcrt.a
@@ -1541,15 +1551,6 @@ WGEOF
         ar cr libs/port/libwine_port.a
         echo "    Replaced libwine_port.a with empty archive"
     fi
-
-    # Force unconditional rebuild of winegcc from patched source.
-    # -B flag tells make to rebuild all targets regardless of timestamps.
-    echo "    Rebuilding winegcc from patched source..."
-    make -B -C tools/winegcc
-    # Verify the binary exists
-    ls -la tools/winegcc/winegcc* 2>/dev/null || echo "    WARNING: winegcc binary not found!"
-    make -C include 2>/dev/null || :
-    make tools/make_xftmpl 2>/dev/null || :
 
     echo "    Preparing DLL build dirs..."
     make \
