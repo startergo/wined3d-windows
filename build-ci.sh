@@ -234,14 +234,16 @@ NTSTATUS __stdcall D3DKMTOpenAdapterFromLuid(void *a){return STATUS_UNSUCCESSFUL
 NTSTATUS __stdcall D3DKMTQueryVideoMemoryInfo(void *a){return STATUS_UNSUCCESSFUL;}
 NTSTATUS __stdcall D3DKMTSetVidPnSourceOwner(const void *a){return STATUS_UNSUCCESSFUL;}
 D3DKMTEOF
-    sed -i 's/^C_SRCS\s*=/C_SRCS = d3dkmt_stubs.c /' dlls/wined3d/Makefile.in
+    grep -q 'd3dkmt_stubs.c' dlls/wined3d/Makefile.in || \
+        sed -i 's/^C_SRCS\s*=/C_SRCS = d3dkmt_stubs.c /' dlls/wined3d/Makefile.in
 
     # qemu-3dfx passthrough hooks — inject into wined3d for HAL enumeration
     # and passthrough device detection (\\.\QEMUchs).
     if [ -f "$SCRIPT_DIR/qemu3dfx_hooks.c" ]; then
         echo "    Injecting qemu-3dfx passthrough hooks..."
         cp "$SCRIPT_DIR/qemu3dfx_hooks.c" dlls/wined3d/qemu3dfx_hooks.c
-        sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_hooks.c /' dlls/wined3d/Makefile.in
+        grep -q 'qemu3dfx_hooks.c' dlls/wined3d/Makefile.in || \
+            sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_hooks.c /' dlls/wined3d/Makefile.in
         # Add exports to spec file (idempotent — skip if already present)
         if [ -f dlls/wined3d/wined3d.spec ] && \
            ! grep -q 'wined3d_hal_3dfx' dlls/wined3d/wined3d.spec; then
@@ -446,11 +448,11 @@ strip_kernel32_vista_imports_wine() {
         SetThreadDescription@8; do
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    # CRT we stub locally — strip from ALL Wine import libs including ntdll
+    # CRT we stub locally — strip from ALL Wine import libs including ntdll.
+    # Note: ctype/conversion (isprint, atoi, etc.) are NOT stubbed locally —
+    # they must come from msvcrt.dll, so do NOT strip them.
     for api in _snprintf _strnicmp _vsnprintf \
                _copysignf \
-               atoi atol abs \
-               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
                __acrt_iob_func \
                _initterm _initterm_e; do
         strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
@@ -778,7 +780,7 @@ __asm__("\n"
     ".globl __imp___copysignf\n"
     ".align 4\n"
     "__imp___copysignf:\n"
-    "    .long ___copysignf\n"
+    "    .long __copysignf\n"
     ".globl __imp____acrt_iob_func\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
@@ -822,7 +824,7 @@ __asm__("\n"
     ".text\n"
 );
 K32EOF
-        sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "$mf"
+        grep -q 'kernel32_compat.c' "$mf" || sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "$mf"
     done
     echo "    Injected Win98 compat stubs into all DLLs"
 }
@@ -835,7 +837,8 @@ create_ddraw_hooks() {
 
     echo "    Injecting qemu-3dfx ddraw HAL stubs..."
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_hooks.c" dlls/ddraw/qemu3dfx_ddraw_hooks.c
-    sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_hooks.c /' dlls/ddraw/Makefile.in
+    grep -q 'qemu3dfx_ddraw_hooks.c' dlls/ddraw/Makefile.in || \
+        sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_hooks.c /' dlls/ddraw/Makefile.in
 
     # Replace @ stub with @ stdcall for our hook functions in ddraw.spec.
     # winebuild does not export @ stub entries — must use @ stdcall.
@@ -881,7 +884,8 @@ create_ddraw_passthrough() {
 
     echo "    Injecting qemu-3dfx ddraw passthrough bridge..."
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_passthrough.c" dlls/ddraw/qemu3dfx_ddraw_passthrough.c
-    sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_passthrough.c /' dlls/ddraw/Makefile.in
+    grep -q 'qemu3dfx_ddraw_passthrough.c' dlls/ddraw/Makefile.in || \
+        sed -i 's/^C_SRCS\s*=/C_SRCS = qemu3dfx_ddraw_passthrough.c /' dlls/ddraw/Makefile.in
 
     # ── Patch main.c: call passthrough init from DllMain ───────────
     if [ -f dlls/ddraw/main.c ]; then
