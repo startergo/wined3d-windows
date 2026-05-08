@@ -193,11 +193,12 @@ UCRTEOF
     ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ucrtcompat.o"
 
     # Inject CRT compat stubs into libgcc.a for functions not in Win98's msvcrt.dll.
-    # copysignf → wraps _copysign (double, which Win98 has).
+    # _copysignf → wraps _copysign (double, which Win98 has).
     # floorf → wraps floor (double, which Win98 has).
     cat > "$tmpdir/crt_compat.c" << 'CRTCEOF'
 double __cdecl _copysign(double x, double y);
 float __cdecl copysignf(float x, float y){ return (float)_copysign((double)x,(double)y); }
+float __cdecl _copysignf(float x, float y){ return (float)_copysign((double)x,(double)y); }
 double __cdecl floor(double);
 float __cdecl floorf(float x){ return (float)floor((double)x); }
 CRTCEOF
@@ -447,6 +448,7 @@ strip_kernel32_vista_imports_wine() {
     done
     # CRT we stub locally — strip from ALL Wine import libs including ntdll
     for api in _snprintf _strnicmp _vsnprintf \
+               _copysignf \
                atoi atol abs \
                isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
                __acrt_iob_func \
@@ -479,7 +481,8 @@ strip_kernel32_vista_imports_wine() {
                sprintf vsprintf snprintf vsnprintf sscanf \
                memcpy memset memmove memcmp memchr \
                strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
-               tolower toupper strtol qsort bsearch; do
+               tolower toupper strtol qsort bsearch \
+               floor ceil fabs sqrt sin cos tan atan2 exp log pow modf ldexp; do
         strip_ntdll_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
     for lib in \
@@ -1384,6 +1387,7 @@ WGEOF
                strlen strcpy strcat strcmp strncmp strchr strstr strrchr strcspn strnlen \
                tolower toupper strtol strtoul qsort bsearch \
                pow exp log \
+               floor ceil fabs sqrt sin cos tan atan2 modf ldexp \
                getc ungetc \
                atoi atol abs \
                isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
