@@ -1541,17 +1541,6 @@ WGEOF
     make -C include 2>/dev/null || :
     make tools/make_xftmpl 2>/dev/null || :
 
-    # Replace libwine_port.a with an empty archive after ALL tools are built.
-    # Wine's portable C library provides memcpy/memmove/strcasecmp etc. as
-    # local implementations which shadow the msvcrt.dll imports. ReactOS
-    # doesn't link libwine_port at all — CRT resolves from libmsvcrt.a
-    # (import thunks → msvcrt.dll) instead.
-    if [ -f libs/port/libwine_port.a ]; then
-        rm libs/port/libwine_port.a
-        ar cr libs/port/libwine_port.a
-        echo "    Replaced libwine_port.a with empty archive"
-    fi
-
     echo "    Preparing DLL build dirs..."
     make \
         dlls/wined3d/Makefile dlls/d3d9/Makefile \
@@ -1574,8 +1563,9 @@ WGEOF
             dlls/d3d8/d3d8_main.c
     fi
 
-    # Strip flags not needed on Windows
-    find . -name Makefile | xargs sed -i \
+    # Strip flags not needed on Windows (only DLL Makefiles — touching tool
+    # Makefiles triggers tool rebuilds during the DLL make phase)
+    find dlls -name Makefile | xargs sed -i \
         -e 's/-fPIC//g' \
         -e 's/-fstack-protector[^ ]*//g'
 
