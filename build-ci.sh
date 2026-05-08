@@ -124,7 +124,12 @@ patch_mingw_archives() {
             objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
             count=$((count + 1))
         done
-        ar cr "$archive" *.o
+        rm -f "$archive"
+        first=1
+        for obj in *.o; do
+            [ -f "$obj" ] || continue
+            if [ "$first" = 1 ]; then ar cr "$archive" "$obj"; first=0; else ar q "$archive" "$obj"; fi
+        done
         echo "    Patched $(basename "$archive") ($count objects)"
         rm -rf "$tmpdir"
         cd "$curdir"
@@ -144,7 +149,12 @@ patch_mingw_archives() {
             objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
             count=$((count + 1))
         done
-        ar cr "$msvcrt_archive" *.o
+        rm -f "$msvcrt_archive"
+        first=1
+        for obj in *.o; do
+            [ -f "$obj" ] || continue
+            if [ "$first" = 1 ]; then ar cr "$msvcrt_archive" "$obj"; first=0; else ar q "$msvcrt_archive" "$obj"; fi
+        done
         echo "    Patched libmsvcrt.a ($count objects, stripped copysignf/floorf)"
         rm -rf "$tmpdir"
         cd "$curdir"
