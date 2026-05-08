@@ -135,29 +135,19 @@ patch_mingw_archives() {
         cd "$curdir"
     done
 
-    # Patch libmsvcrt.a: only strip copysignf/floorf, keep other CRT imports
+    # Patch libmsvcrt.a: only strip copysignf/floorf, keep other CRT imports.
+    # Use direct objcopy on the whole archive (works for this archive, unlike
+    # libgcc/libmingwex). Avoids ar x/ar q loop which is too slow with 600+ objects.
     local msvcrt_archive=/mingw32/lib/libmsvcrt.a
     if [ -f "$msvcrt_archive" ]; then
-        local tmpdir="${TMPDIR:-/tmp}/objcopy_$$_msvcrt_$(date +%s)"
-        mkdir -p "$tmpdir"
-        cd "$tmpdir"
-        ar x "$msvcrt_archive" || { cd "$curdir"; rm -rf "$tmpdir"; return; }
-        local count=0
-        for obj in *.o; do
-            [ -f "$obj" ] || continue
-            objcopy "${msvcrt_strip[@]}" "$obj" 2>/dev/null || true
-            objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
-            count=$((count + 1))
-        done
-        rm -f "$msvcrt_archive"
-        first=1
-        for obj in *.o; do
-            [ -f "$obj" ] || continue
-            if [ "$first" = 1 ]; then ar cr "$msvcrt_archive" "$obj"; first=0; else ar q "$msvcrt_archive" "$obj"; fi
-        done
-        echo "    Patched libmsvcrt.a ($count objects, stripped copysignf/floorf)"
-        rm -rf "$tmpdir"
-        cd "$curdir"
+        local tmp="${TMPDIR:-/tmp}/msvcrt_$$_$(date +%s).a"
+        if objcopy "${msvcrt_strip[@]}" "$msvcrt_archive" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$msvcrt_archive"
+            echo "    Stripped copysignf/floorf from libmsvcrt.a"
+        else
+            rm -f "$tmp"
+            echo "    (libmsvcrt.a copysignf/floorf strip failed)"
+        fi
     fi
 }
 
