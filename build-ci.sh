@@ -652,6 +652,18 @@ int __cdecl _snprintf(char *buf, unsigned int size, const char *fmt, ...)
     return 0;
 }
 
+/* --- floor (prevents ntdll.dll import on Wine 7+) --- */
+double __cdecl floor(double x)
+{
+    if (x >= 0.0) return (double)(long long)x;
+    long long i = (long long)x;
+    return (x == (double)i) ? x : (double)(i - 1);
+}
+
+/* --- _copysignf (Win98 msvcrt.dll only has _copysign double) --- */
+double __cdecl _copysign(double x, double y);
+float __cdecl _copysignf(float x, float y) { return (float)_copysign((double)x, (double)y); }
+
 /* --- __lc_codepage (msvcrt data variable, not in reference imports) --- */
 unsigned int __lc_codepage = 437;
 
@@ -759,6 +771,14 @@ __asm__("\n"
     ".align 4\n"
     "__imp___snprintf:\n"
     "    .long __snprintf\n"
+    ".globl __imp__floor\n"
+    ".align 4\n"
+    "__imp__floor:\n"
+    "    .long _floor\n"
+    ".globl __imp___copysignf\n"
+    ".align 4\n"
+    "__imp___copysignf:\n"
+    "    .long ___copysignf\n"
     ".globl __imp____acrt_iob_func\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
