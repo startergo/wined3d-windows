@@ -82,11 +82,10 @@ patch_mingw_archives() {
     echo "    Patching MinGW runtime archives for msvcrt compatibility..."
     local curdir="$(pwd)"
 
-    # Strip CRT symbols from libgcc.a so the linker resolves them from
-    # libmsvcrt.a (import thunks → msvcrt.dll) instead of using static
-    # libgcc implementations.  The reference DLLs import memcpy/memset/
-    # strlen etc. from msvcrt.dll.
-    local strip_crt_syms=()
+    # Symbols to strip from runtime archives (libgcc, libmingwex) so the
+    # linker resolves them from libmsvcrt.a (import thunks → msvcrt.dll).
+    # The reference DLLs import memcpy/memset/strlen etc. from msvcrt.dll.
+    local crt_syms=()
     for sym in \
         memcpy memset memmove memcmp memchr \
         strlen strcpy strcat strcmp strncmp \
@@ -94,48 +93,61 @@ patch_mingw_archives() {
         atoi strtol strtoul \
         copysign copysignf floor floorf ceil fabs fabsf \
         sqrt sin cos tan atan2 exp log pow modf ldexp; do
-        strip_crt_syms+=(--strip-symbol "_${sym}" --strip-symbol "__imp__${sym}")
+        crt_syms+=(--strip-symbol "_${sym}" --strip-symbol "__imp__${sym}")
     done
 
-    for archive in /mingw32/lib/libmingwex.a \
-                   /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc.a \
-                   /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc_eh.a; do
-        if [ -f "$archive" ]; then
-            local tmp="${TMPDIR:-/tmp}/patch_$$_$(date +%s).a"
-            if objcopy "${strip_crt_syms[@]}" "$archive" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
-                mv "$tmp" "$archive"
-                echo "    Stripped CRT symbols from $(basename "$archive")"
-            else
-                rm -f "$tmp"
-            fi
-            # Also rename __acrt_iob_func → __iob_func in each object
-            local tmpdir="${TMPDIR:-/tmp}/objcopy_$$_$(basename "$archive")"
-            mkdir -p "$tmpdir"
-            cd "$tmpdir"
-            ar x "$archive"
-            for obj in *.o; do
-                objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
-            done
-            ar cr "$archive" *.o
-            rm -rf "$tmpdir"
-            cd "$curdir"
-        fi
+    # Also strip copysignf/floorf from libmsvcrt.a (float versions not in
+    # Win98 msvcrt.dll — our inject stubs wrap the double versions instead).
+    local msvcrt_strip=()
+    for sym in copysignf floorf; do
+        msvcrt_strip+=(--strip-symbol "_${sym}" --strip-symbol "__imp__${sym}")
     done
 
-    # Strip _copysignf and _floorf from libmsvcrt.a — these float wrappers
-    # don't exist in Win98's msvcrt.dll. The linker will use our inject stubs
-    # in libgcc.a instead (which wrap the double versions _copysign/floor).
+    # Use ar x / per-object objcopy / ar cr approach — objcopy on whole
+    # archives silently fails on MSYS2 for some archive types.
+    local all_archives=()
+    for a in /mingw32/lib/libmingwex.a \
+             /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc.a \
+             /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc_eh.a; do
+        [ -f "$a" ] && all_archives+=("$a")
+    done
+
+    for archive in "${all_archives[@]}"; do
+        local tmpdir="${TMPDIR:-/tmp}/objcopy_$$_$(basename "$archive")_$(date +%s)"
+        mkdir -p "$tmpdir"
+        cd "$tmpdir"
+        ar x "$archive" || { cd "$curdir"; rm -rf "$tmpdir"; continue; }
+        local count=0
+        for obj in *.o; do
+            [ -f "$obj" ] || continue
+            objcopy "${crt_syms[@]}" "$obj" 2>/dev/null || true
+            objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
+            count=$((count + 1))
+        done
+        ar cr "$archive" *.o
+        echo "    Patched $(basename "$archive") ($count objects)"
+        rm -rf "$tmpdir"
+        cd "$curdir"
+    done
+
+    # Patch libmsvcrt.a: only strip copysignf/floorf, keep other CRT imports
     local msvcrt_archive=/mingw32/lib/libmsvcrt.a
     if [ -f "$msvcrt_archive" ]; then
-        local tmp="${TMPDIR:-/tmp}/msvcrt_$$_$(date +%s).a"
-        if objcopy --strip-symbol _copysignf --strip-symbol __imp__copysignf \
-                   --strip-symbol _floorf --strip-symbol __imp__floorf \
-                   "$msvcrt_archive" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
-            mv "$tmp" "$msvcrt_archive"
-            echo "    Stripped copysignf/floorf from libmsvcrt.a"
-        else
-            rm -f "$tmp"
-        fi
+        local tmpdir="${TMPDIR:-/tmp}/objcopy_$$_msvcrt_$(date +%s)"
+        mkdir -p "$tmpdir"
+        cd "$tmpdir"
+        ar x "$msvcrt_archive" || { cd "$curdir"; rm -rf "$tmpdir"; return; }
+        local count=0
+        for obj in *.o; do
+            [ -f "$obj" ] || continue
+            objcopy "${msvcrt_strip[@]}" "$obj" 2>/dev/null || true
+            objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
+            count=$((count + 1))
+        done
+        ar cr "$msvcrt_archive" *.o
+        echo "    Patched libmsvcrt.a ($count objects, stripped copysignf/floorf)"
+        rm -rf "$tmpdir"
+        cd "$curdir"
     fi
 }
 
