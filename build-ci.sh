@@ -81,10 +81,34 @@ extract_wine() {
 patch_mingw_archives() {
     echo "    Patching MinGW runtime archives for msvcrt compatibility..."
     local curdir="$(pwd)"
+
+    # Strip CRT symbols from libgcc.a so the linker resolves them from
+    # libmsvcrt.a (import thunks → msvcrt.dll) instead of using static
+    # libgcc implementations.  The reference DLLs import memcpy/memset/
+    # strlen etc. from msvcrt.dll.
+    local strip_crt_syms=()
+    for sym in \
+        memcpy memset memmove memcmp memchr \
+        strlen strcpy strcat strcmp strncmp \
+        strchr strrchr strstr strcspn strnlen \
+        atoi strtol strtoul \
+        copysign copysignf floor floorf ceil fabs fabsf \
+        sqrt sin cos tan atan2 exp log pow modf ldexp; do
+        strip_crt_syms+=(--strip-symbol "_${sym}" --strip-symbol "__imp__${sym}")
+    done
+
     for archive in /mingw32/lib/libmingwex.a \
                    /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc.a \
                    /mingw32/lib/gcc/i686-w64-mingw32/*/libgcc_eh.a; do
         if [ -f "$archive" ]; then
+            local tmp="${TMPDIR:-/tmp}/patch_$$_$(date +%s).a"
+            if objcopy "${strip_crt_syms[@]}" "$archive" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+                mv "$tmp" "$archive"
+                echo "    Stripped CRT symbols from $(basename "$archive")"
+            else
+                rm -f "$tmp"
+            fi
+            # Also rename __acrt_iob_func → __iob_func in each object
             local tmpdir="${TMPDIR:-/tmp}/objcopy_$$_$(basename "$archive")"
             mkdir -p "$tmpdir"
             cd "$tmpdir"
@@ -92,30 +116,6 @@ patch_mingw_archives() {
             for obj in *.o; do
                 objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
             done
-            # Remove CRT function objects from libgcc.a so the linker resolves
-            # them from libmsvcrt.a (import thunks → msvcrt.dll) instead.
-            # This matches the reference DLLs which import memcpy/memset/strlen
-            # etc. from msvcrt.dll rather than using static libgcc implementations.
-            local strip_objs=()
-            for obj in *; do
-                case "$obj" in
-                    # libgcc provides these as static implementations; we want
-                    # them from msvcrt.dll so they match the reference DLLs.
-                    _memcpy.o|_memset.o|_memmove.o|_memcmp.o|_memchr.o|\
-                    _strlen.o|_strcpy.o|_strcat.o|_strcmp.o|_strncmp.o|\
-                    _strchr.o|_strrchr.o|_strstr.o|_strcspn.o|_strnlen.o|\
-                    _atoi.o|_strtol.o|_strtoul.o|\
-                    _copysignf.o|_copysign.o|_floor.o|_ceil.o|\
-                    _fabs.o|_sqrt.o|_sin.o|_cos.o|_tan.o|_atan2.o|\
-                    _exp.o|_log.o|_pow.o|_modf.o|_ldexp.o|_fabsf.o)
-                        strip_objs+=("$obj")
-                        ;;
-                esac
-            done
-            if [ ${#strip_objs[@]} -gt 0 ]; then
-                rm -f "${strip_objs[@]}"
-                echo "    Stripped ${#strip_objs[@]} CRT objects from $(basename "$archive")"
-            fi
             ar cr "$archive" *.o
             rm -rf "$tmpdir"
             cd "$curdir"
