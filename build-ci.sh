@@ -1541,6 +1541,33 @@ WGEOF
     make -C include 2>/dev/null || :
     make tools/make_xftmpl 2>/dev/null || :
 
+    # Localize CRT symbols in libwine_port.a (after all tools are built).
+    # ReactOS doesn't link libwine_port.a at all — CRT resolves from
+    # msvcrt.dll via import thunks. We can't remove the archive (tools
+    # need mkstemps etc.), but localizing CRT symbols makes them invisible
+    # to the linker for resolving external references. The linker then
+    # finds memcpy/memset/etc. in libmsvcrt.a (→ msvcrt.dll imports).
+    # Non-CRT functions (mkstemps, etc.) remain global for tool rebuilds.
+    if [ -f libs/port/libwine_port.a ]; then
+        local port_tmp="${TMPDIR:-/tmp}/port_$$_$(date +%s).a"
+        local loc_args=()
+        for sym in \
+            memcpy memset memmove memcmp memchr \
+            strlen strcpy strcat strcmp strncmp \
+            strchr strrchr strstr strcspn strnlen \
+            atoi strtol strtoul \
+            strcasecmp strncasecmp strnicmp; do
+            loc_args+=(--localize-symbol "_${sym}")
+        done
+        if objcopy "${loc_args[@]}" libs/port/libwine_port.a "$port_tmp" 2>/dev/null && [ -f "$port_tmp" ]; then
+            mv "$port_tmp" libs/port/libwine_port.a
+            echo "    Localized CRT symbols in libwine_port.a"
+        else
+            rm -f "$port_tmp"
+            echo "    (libwine_port.a CRT localization skipped)"
+        fi
+    fi
+
     echo "    Preparing DLL build dirs..."
     make \
         dlls/wined3d/Makefile dlls/d3d9/Makefile \
