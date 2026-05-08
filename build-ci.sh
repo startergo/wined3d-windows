@@ -121,6 +121,22 @@ patch_mingw_archives() {
             cd "$curdir"
         fi
     done
+
+    # Strip _copysignf and _floorf from libmsvcrt.a — these float wrappers
+    # don't exist in Win98's msvcrt.dll. The linker will use our inject stubs
+    # in libgcc.a instead (which wrap the double versions _copysign/floor).
+    local msvcrt_archive=/mingw32/lib/libmsvcrt.a
+    if [ -f "$msvcrt_archive" ]; then
+        local tmp="${TMPDIR:-/tmp}/msvcrt_$$_$(date +%s).a"
+        if objcopy --strip-symbol _copysignf --strip-symbol __imp__copysignf \
+                   --strip-symbol _floorf --strip-symbol __imp__floorf \
+                   "$msvcrt_archive" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$msvcrt_archive"
+            echo "    Stripped copysignf/floorf from libmsvcrt.a"
+        else
+            rm -f "$tmp"
+        fi
+    fi
 }
 
 # ── Create ucrtcompat stubs and inject into libmsvcrt.a ─────────────
