@@ -478,3 +478,23 @@ __asm__("\n"
     "    .long _wine_k32compat_FLAET@8\n"
     ".text\n"
 );
+
+/* __imp__ aliases for original Win2000+ function names (before -D rename).
+   __declspec(dllimport) in system headers bypasses preprocessor -D flags,
+   generating __imp__ references to the original names. */
+__asm__("\n"
+    ".globl __imp__IsBadStringPtrW@8\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp__IsBadStringPtrW@8:\n"
+    "    .long _wine_k32compat_IBSP_W@8\n"
+    ".globl __imp__FreeLibraryAndExitThread@8\n"
+    ".align 4\n"
+    "__imp__FreeLibraryAndExitThread@8:\n"
+    "    .long _wine_k32compat_FLAET@8\n"
+    ".globl __imp__ChangeDisplaySettingsExW@20\n"
+    ".align 4\n"
+    "__imp__ChangeDisplaySettingsExW@20:\n"
+    "    .long _wine_k32compat_CDSE_W@20\n"
+    ".text\n"
+);

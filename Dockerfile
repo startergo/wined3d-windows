@@ -149,7 +149,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         WakeConditionVariable@4 WakeAllConditionVariable@4 \
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
-        SetThreadDescription@8
+        SetThreadDescription@8 \
         IsBadStringPtrW@8 FreeLibraryAndExitThread@8; do \
         _vstrip="$_vstrip --strip-symbol _${api} --strip-symbol __imp__${api}"; \
     done && \
@@ -337,7 +337,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
                 for _func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
-                            GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \\
+                            GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
                             ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do \
                     grep -q "$_func" "$f" 2>/dev/null || continue; \
                     case "$_func" in \
@@ -656,7 +656,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
                 for _func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
-                            GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \\
+                            GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
                             ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do \
                     grep -q "$_func" "$f" 2>/dev/null || continue; \
                     case "$_func" in \
