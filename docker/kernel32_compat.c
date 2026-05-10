@@ -297,6 +297,55 @@ int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITOREN
 void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
 void * __stdcall wine_k32compat_MFP(unsigned long x, unsigned long y, unsigned long flags) { return (void*)1; }
 
+/* --- ChangeDisplaySettingsExW (Win2000+, Win98 only has A version) --- */
+long __stdcall ChangeDisplaySettingsExA(const char *, const void *, void *, unsigned long, void *);
+static void devmode_w_to_a(const DEVMODEW_LOCAL *w, DEVMODEA_LOCAL *a) {
+    int i;
+    memset(a, 0, sizeof(*a));
+    for(i = 0; i < 31 && w->dmDeviceName[i]; i++) a->dmDeviceName[i] = (unsigned char)w->dmDeviceName[i];
+    a->dmSpecVersion = w->dmSpecVersion; a->dmDriverVersion = w->dmDriverVersion;
+    a->dmSize = sizeof(*a); a->dmDriverExtra = w->dmDriverExtra; a->dmFields = w->dmFields;
+    a->dmPosition_x = w->dmPosition_x; a->dmPosition_y = w->dmPosition_y;
+    a->dmDisplayOrientation = w->dmDisplayOrientation; a->dmDisplayFixedOutput = w->dmDisplayFixedOutput;
+    a->dmColor = w->dmColor; a->dmDuplex = w->dmDuplex;
+    a->dmYResolution = w->dmYResolution; a->dmTTOption = w->dmTTOption; a->dmCollate = w->dmCollate;
+    for(i = 0; i < 31 && w->dmFormName[i]; i++) a->dmFormName[i] = (unsigned char)w->dmFormName[i];
+    a->dmLogPixels = w->dmLogPixels;
+    a->dmBitsPerPel = w->dmBitsPerPel; a->dmPelsWidth = w->dmPelsWidth; a->dmPelsHeight = w->dmPelsHeight;
+    a->dmDisplayFlags = w->dmDisplayFlags; a->dmDisplayFrequency = w->dmDisplayFrequency;
+    a->dmICMMethod = w->dmICMMethod; a->dmICMIntent = w->dmICMIntent;
+    a->dmMediaType = w->dmMediaType; a->dmDitherType = w->dmDitherType;
+    a->dmReserved1 = w->dmReserved1; a->dmReserved2 = w->dmReserved2;
+    a->dmPanningWidth = w->dmPanningWidth; a->dmPanningHeight = w->dmPanningHeight;
+}
+long __stdcall wine_k32compat_CDSE_W(const unsigned short *dev, const void *dm_in, void *hwnd, unsigned long flags, void *lparam)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    if(dm_in) {
+        devmode_w_to_a((const DEVMODEW_LOCAL*)dm_in, &dma);
+        return ChangeDisplaySettingsExA(dev?devA:NULL, &dma, hwnd, flags, lparam);
+    }
+    return ChangeDisplaySettingsExA(dev?devA:NULL, NULL, hwnd, flags, lparam);
+}
+
+/* --- IsBadStringPtrW (Win2000+, Win98 only has A version) --- */
+int __stdcall IsBadStringPtrA(const char *, unsigned long);
+int __stdcall wine_k32compat_IBSP_W(const unsigned short *lpsz, unsigned long ucchMax)
+{
+    if(!lpsz) return 1;
+    return IsBadStringPtrA((const char *)lpsz, ucchMax * 2);
+}
+
+/* --- FreeLibraryAndExitThread (Win2000+, not on Win98) --- */
+int __stdcall FreeLibrary(void *);
+void __stdcall ExitThread(unsigned long);
+void __stdcall wine_k32compat_FLAET(void *hLibModule, unsigned long dwExitCode)
+{
+    FreeLibrary(hLibModule);
+    ExitThread(dwExitCode);
+}
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp___initterm\n"
@@ -415,5 +464,17 @@ __asm__("\n"
     ".align 4\n"
     "__imp__wine_k32compat_MFP@12:\n"
     "    .long _wine_k32compat_MFP@12\n"
+    ".globl __imp__wine_k32compat_CDSE_W@20\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_CDSE_W@20:\n"
+    "    .long _wine_k32compat_CDSE_W@20\n"
+    ".globl __imp__wine_k32compat_IBSP_W@8\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_IBSP_W@8:\n"
+    "    .long _wine_k32compat_IBSP_W@8\n"
+    ".globl __imp__wine_k32compat_FLAET@8\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_FLAET@8:\n"
+    "    .long _wine_k32compat_FLAET@8\n"
     ".text\n"
 );

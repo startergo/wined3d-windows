@@ -299,6 +299,8 @@ strip_kernel32_vista_imports() {
                -e '/SleepConditionVariableCS/d' \
                -e '/SleepConditionVariableSRW/d' \
                -e '/GetTickCount64/d' \
+               -e '/IsBadStringPtrW/d' \
+               -e '/FreeLibraryAndExitThread/d' \
                -e '/_snprintf/d' \
                -e '/_strnicmp/d' \
                -e '/_vsnprintf/d' \
@@ -379,6 +381,7 @@ strip_kernel32_vista_imports() {
                -e '/EnumDisplayMonitors/d' \
                -e '/MonitorFromWindow/d' \
                -e '/MonitorFromPoint/d' \
+               -e '/ChangeDisplaySettingsExW/d' \
                "$spec"
     done
     echo "    Stripped Vista+/Win2000+ APIs and CRT from kernel32/ntdll/user32 specs"
@@ -398,14 +401,16 @@ strip_kernel32_vista_imports() {
         WakeConditionVariable@4 WakeAllConditionVariable@4 \
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
-        SetThreadDescription@8; do
+        SetThreadDescription@8 \
+        IsBadStringPtrW@8 FreeLibraryAndExitThread@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # Win2000+ user32 display functions (Win98 only has A-versions)
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
         EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        ChangeDisplaySettingsExW@20; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # ntdll CRT functions (cdecl, no @N suffix) — resolve from msvcrt instead.
@@ -484,14 +489,16 @@ strip_kernel32_vista_imports_wine() {
         WakeConditionVariable@4 WakeAllConditionVariable@4 \
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
-        SetThreadDescription@8; do
+        SetThreadDescription@8 \
+        IsBadStringPtrW@8 FreeLibraryAndExitThread@8; do
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # Win2000+ user32 display functions (Win98 only has A-versions)
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
         EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        ChangeDisplaySettingsExW@20; do
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # CRT we stub locally — strip from ALL Wine import libs including ntdll.
@@ -923,6 +930,55 @@ int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITOREN
 void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
 void * __stdcall wine_k32compat_MFP(unsigned long x, unsigned long y, unsigned long flags) { return (void*)1; }
 
+/* --- ChangeDisplaySettingsExW (Win2000+, Win98 only has A version) --- */
+long __stdcall ChangeDisplaySettingsExA(const char *, const void *, void *, unsigned long, void *);
+static void devmode_w_to_a(const DEVMODEW_LOCAL *w, DEVMODEA_LOCAL *a) {
+    int i;
+    memset(a, 0, sizeof(*a));
+    for(i = 0; i < 31 && w->dmDeviceName[i]; i++) a->dmDeviceName[i] = (unsigned char)w->dmDeviceName[i];
+    a->dmSpecVersion = w->dmSpecVersion; a->dmDriverVersion = w->dmDriverVersion;
+    a->dmSize = sizeof(*a); a->dmDriverExtra = w->dmDriverExtra; a->dmFields = w->dmFields;
+    a->dmPosition_x = w->dmPosition_x; a->dmPosition_y = w->dmPosition_y;
+    a->dmDisplayOrientation = w->dmDisplayOrientation; a->dmDisplayFixedOutput = w->dmDisplayFixedOutput;
+    a->dmColor = w->dmColor; a->dmDuplex = w->dmDuplex;
+    a->dmYResolution = w->dmYResolution; a->dmTTOption = w->dmTTOption; a->dmCollate = w->dmCollate;
+    for(i = 0; i < 31 && w->dmFormName[i]; i++) a->dmFormName[i] = (unsigned char)w->dmFormName[i];
+    a->dmLogPixels = w->dmLogPixels;
+    a->dmBitsPerPel = w->dmBitsPerPel; a->dmPelsWidth = w->dmPelsWidth; a->dmPelsHeight = w->dmPelsHeight;
+    a->dmDisplayFlags = w->dmDisplayFlags; a->dmDisplayFrequency = w->dmDisplayFrequency;
+    a->dmICMMethod = w->dmICMMethod; a->dmICMIntent = w->dmICMIntent;
+    a->dmMediaType = w->dmMediaType; a->dmDitherType = w->dmDitherType;
+    a->dmReserved1 = w->dmReserved1; a->dmReserved2 = w->dmReserved2;
+    a->dmPanningWidth = w->dmPanningWidth; a->dmPanningHeight = w->dmPanningHeight;
+}
+long __stdcall wine_k32compat_CDSE_W(const unsigned short *dev, const void *dm_in, void *hwnd, unsigned long flags, void *lparam)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    if(dm_in) {
+        devmode_w_to_a((const DEVMODEW_LOCAL*)dm_in, &dma);
+        return ChangeDisplaySettingsExA(dev?devA:NULL, &dma, hwnd, flags, lparam);
+    }
+    return ChangeDisplaySettingsExA(dev?devA:NULL, NULL, hwnd, flags, lparam);
+}
+
+/* --- IsBadStringPtrW (Win2000+, Win98 only has A version) --- */
+int __stdcall IsBadStringPtrA(const char *, unsigned long);
+int __stdcall wine_k32compat_IBSP_W(const unsigned short *lpsz, unsigned long ucchMax)
+{
+    if(!lpsz) return 1;
+    return IsBadStringPtrA((const char *)lpsz, ucchMax * 2);
+}
+
+/* --- FreeLibraryAndExitThread (Win2000+, not on Win98) --- */
+int __stdcall FreeLibrary(void *);
+void __stdcall ExitThread(unsigned long);
+void __stdcall wine_k32compat_FLAET(void *hLibModule, unsigned long dwExitCode)
+{
+    FreeLibrary(hLibModule);
+    ExitThread(dwExitCode);
+}
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp___initterm\n"
@@ -1065,6 +1121,18 @@ __asm__("\n"
     ".align 4\n"
     "__imp__wine_k32compat_MFP@12:\n"
     "    .long _wine_k32compat_MFP@12\n"
+    ".globl __imp__wine_k32compat_CDSE_W@20\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_CDSE_W@20:\n"
+    "    .long _wine_k32compat_CDSE_W@20\n"
+    ".globl __imp__wine_k32compat_IBSP_W@8\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_IBSP_W@8:\n"
+    "    .long _wine_k32compat_IBSP_W@8\n"
+    ".globl __imp__wine_k32compat_FLAET@8\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_FLAET@8:\n"
+    "    .long _wine_k32compat_FLAET@8\n"
     ".text\n"
 );
 K32EOF
@@ -1283,7 +1351,8 @@ build_modern() {
             case "$f" in */kernel32_compat.c) continue ;; esac
             local changed=0
             for func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
-                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint; do
+                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
+                        ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do
                 grep -q "$func" "$f" 2>/dev/null || continue
                 local compat=wine_k32compat_$(echo "$func" | sed 's/\([A-Z]\)/_\l\1/g;s/^_//;s/__/_/' | tr '[:upper:]' '[:lower:]')
                 # Map function names to compat names
@@ -1295,6 +1364,9 @@ build_modern() {
                     EnumDisplayMonitors) compat=wine_k32compat_EDM ;;
                     MonitorFromWindow) compat=wine_k32compat_MFW ;;
                     MonitorFromPoint) compat=wine_k32compat_MFP ;;
+                    ChangeDisplaySettingsExW) compat=wine_k32compat_CDSE_W ;;
+                    IsBadStringPtrW) compat=wine_k32compat_IBSP_W ;;
+                    FreeLibraryAndExitThread) compat=wine_k32compat_FLAET ;;
                 esac
                 sed -i "1i #define $func $compat" "$f"
                 changed=1
@@ -1313,10 +1385,10 @@ build_modern() {
         --without-pcap --without-pulse --without-sane \
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12" \
-        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12"
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8" \
+        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
@@ -1461,7 +1533,8 @@ build_legacy() {
             case "$f" in */kernel32_compat.c) continue ;; esac
             local changed=0
             for func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
-                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint; do
+                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
+                        ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do
                 grep -q "$func" "$f" 2>/dev/null || continue
                 local compat
                 case "$func" in
@@ -1472,6 +1545,9 @@ build_legacy() {
                     EnumDisplayMonitors) compat=wine_k32compat_EDM ;;
                     MonitorFromWindow) compat=wine_k32compat_MFW ;;
                     MonitorFromPoint) compat=wine_k32compat_MFP ;;
+                    ChangeDisplaySettingsExW) compat=wine_k32compat_CDSE_W ;;
+                    IsBadStringPtrW) compat=wine_k32compat_IBSP_W ;;
+                    FreeLibraryAndExitThread) compat=wine_k32compat_FLAET ;;
                 esac
                 sed -i "1i #define $func $compat" "$f"
                 changed=1
@@ -1489,7 +1565,7 @@ build_legacy() {
         --without-pcap --without-pulse --without-sane --without-oss \
         --without-vulkan \
         --disable-shared --enable-static \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
         LDFLAGS="-static-libgcc -mcrtdll=msvcrt"
 
     # Strip Vista+ API from kernel32/ntdll specs — MUST be after configure,
@@ -1856,7 +1932,8 @@ WGEOF
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
         EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        ChangeDisplaySettingsExW@20; do
         strip_legacy_user32+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     for lib in dlls/user32/libuser32.a; do
