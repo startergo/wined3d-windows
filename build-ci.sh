@@ -642,21 +642,56 @@ BOOL __stdcall RtlIsCriticalSectionLockedByThread(CRITSEC *cs)
 }
 
 /* --- InitOnceExecuteOnce (Vista+) ---
-   One-time initialization. Just call the init function immediately. */
+   One-time init using InterlockedCompareExchange for thread safety. */
 typedef long BOOL_CALL_ONCE(void *, void **);
+long __stdcall InterlockedCompareExchange(long *, long, long);
 BOOL __stdcall InitOnceExecuteOnce(void *init_once, BOOL_CALL_ONCE *init_fn, void *param, void **context)
 {
-    if(init_fn) return init_fn(param, context ? context : (void **)init_once);
+    long *flag = (long *)init_once;
+    if(InterlockedCompareExchange(flag, 1, 0) == 0) {
+        if(init_fn) init_fn(param, context ? context : (void **)init_once);
+    }
     return 1;
 }
 
 /* --- ConditionVariable family (Vista+) ---
-   Used by vkd3d (Vulkan). No-ops — vkd3d won't function without Vulkan anyway. */
+   Implemented using Win98-compatible manual-reset events. */
 typedef struct _CONDITION_VARIABLE { void *Ptr; } CONDITION_VARIABLE;
+void __stdcall LeaveCriticalSection(CRITSEC *);
+void __stdcall EnterCriticalSection(CRITSEC *);
+void *__stdcall CreateEventA(void *, int, int, const char *);
+int __stdcall SetEvent(void *);
+int __stdcall ResetEvent(void *);
+unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
+int __stdcall CloseHandle(void *);
 void __stdcall InitializeConditionVariable(CONDITION_VARIABLE *cv) { if(cv) cv->Ptr = 0; }
-void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv) { }
-void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv) { }
-unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC *cs, unsigned long ms) { return 0; }
+static void *cv_ensure_event(CONDITION_VARIABLE *cv)
+{
+    void *ev = cv->Ptr;
+    if(!ev) {
+        ev = CreateEventA((void*)0, 1, 0, (const char*)0);
+        if(InterlockedCompareExchange((long *)&cv->Ptr, (long)ev, 0) != 0)
+            CloseHandle(ev);
+    }
+    return cv->Ptr;
+}
+void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv)
+{
+    if(cv && cv->Ptr) SetEvent(cv->Ptr);
+}
+void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv)
+{
+    if(cv && cv->Ptr) SetEvent(cv->Ptr);
+}
+unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC *cs, unsigned long ms)
+{
+    void *ev = cv_ensure_event(cv);
+    ResetEvent(ev);
+    LeaveCriticalSection(cs);
+    WaitForSingleObject(ev, ms ? ms : 0xFFFFFFFFUL);
+    EnterCriticalSection(cs);
+    return 1;
+}
 
 /* --- SetThreadDescription (Windows 10+) ---
    Sets a descriptive string for a thread. No-op on Win98. */
