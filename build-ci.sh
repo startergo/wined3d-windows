@@ -1233,6 +1233,21 @@ build_modern() {
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
 
+    # d3d9/d3d8/ddraw don't normally link user32, but our kernel32_compat.c
+    # user32 W→A wrappers call EnumDisplaySettingsA etc. from user32.
+    # Add user32 to IMPORTS in Makefile.in so configure includes it in the link.
+    for dll in d3d9 d3d8 ddraw; do
+        mf="dlls/$dll/Makefile.in"
+        [ -f "$mf" ] || continue
+        grep -q '^IMPORTS.*user32' "$mf" && continue
+        if grep -q '^IMPORTS' "$mf"; then
+            sed -i '/^IMPORTS/s/$/ user32/' "$mf"
+        else
+            echo 'IMPORTS = user32' >> "$mf"
+        fi
+        echo "    Added user32 to $dll Makefile.in IMPORTS"
+    done
+
     # Redirect GetModuleHandleExW calls to our compat wrapper (same as legacy)
     for dll in ddraw wined3d d3d9 d3d8; do
         for f in dlls/$dll/*.c; do
@@ -1354,19 +1369,6 @@ build_modern() {
     # local __imp__ pointers instead of generating PE import table entries.
     echo "    Stripping Vista+ symbols from Wine-built import libs..."
     strip_kernel32_vista_imports_wine
-
-    # d3d9/d3d8/ddraw don't normally link user32, but our kernel32_compat.c
-    # user32 W→A wrappers call EnumDisplaySettingsA etc. from user32.
-    # Add user32 to IMPORTS so winebuild includes libuser32.a in the link.
-    for dll in d3d9 d3d8 ddraw; do
-        mf="dlls/$dll/Makefile"
-        [ -f "$mf" ] || continue
-        if grep -q '^IMPORTS.*user32' "$mf"; then continue; fi
-        sed -i '/^IMPORTS/{
-            /$/s/$/ user32/
-        }' "$mf"
-        echo "    Added user32 to $dll IMPORTS"
-    done
 
     local targets=(
         dlls/wined3d/i386-windows/wined3d.dll
