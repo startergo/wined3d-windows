@@ -1,0 +1,7 @@
+output/
+src/
+.git/
+.github/
+.claude/
+tests/
+*.md

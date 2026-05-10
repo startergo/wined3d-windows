@@ -387,12 +387,21 @@ strip_kernel32_vista_imports() {
         SetThreadDescription@8; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
-    # ntdll CRT functions (cdecl, no @N suffix) — resolve from msvcrt instead
+    # ntdll CRT functions (cdecl, no @N suffix) — resolve from msvcrt instead.
+    # Must match Docker's libntdll.a strip list exactly.
     for api in _snprintf _strnicmp _vsnprintf _stricmp \
                sprintf vsprintf snprintf vsnprintf sscanf \
-               memcpy memset memmove memcmp \
-               strlen strcpy strcat strcmp strncmp strchr strstr strrchr \
-               tolower toupper atoi atol strtol qsort bsearch; do
+               memcpy memset memmove memcmp memchr \
+               strlen strcpy strcat strcmp strncmp strchr strstr strrchr strcspn strnlen \
+               tolower toupper strtol strtoul qsort bsearch \
+               atoi atol abs \
+               isprint isdigit isalpha isalnum isspace isupper islower isxdigit iscntrl isgraph ispunct \
+               _vsnprintf_s \
+               sin cos tan atan atan2 sqrt ceil floor \
+               fprintf vfprintf \
+               rand srand abort \
+               fopen fclose fgets fputc fread fwrite clearerr feof ferror \
+               fabs modf ldexp; do
         strip_syms+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
 
@@ -410,10 +419,13 @@ strip_kernel32_vista_imports() {
         fi
     done
 
-    # Strip _initterm_e from msvcrt import libs — Win98's msvcrt.dll lacks it.
+    # Strip Win98-incompatible CRT from msvcrt import libs.
+    # _initterm/_initterm_e: CRT startup, not in Win98 msvcrt.dll.
+    # strnlen: C11, not in Win98 msvcrt.dll.
+    # _isctype: internal CRT helper, not in Win98 msvcrt.dll.
     # Our kernel32_compat.c provides local stubs instead.
     local strip_crt=()
-    for api in _initterm _initterm_e; do
+    for api in _initterm _initterm_e strnlen _isctype; do
         strip_crt+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
     for lib in /mingw32/lib/libmsvcrt.a \
@@ -699,6 +711,16 @@ int __cdecl _initterm_e(_initfn *begin, _initfn *end)
     return 0;
 }
 
+/* --- strnlen (C11, not in Win98 msvcrt.dll) --- */
+unsigned int __cdecl strnlen(const char *s, unsigned int maxlen) {
+    unsigned int i = 0;
+    while (i < maxlen && s[i]) i++;
+    return i;
+}
+
+/* --- _isctype (internal CRT helper, not in Win98 msvcrt.dll) --- */
+int __cdecl _isctype(int c, int mask) { (void)c; (void)mask; return 0; }
+
 /* --- UCRT-specific floating-point classification (not in msvcrt.dll) ---
    Used by vkd3d (Vulkan shader compiler). No-op stubs. */
 int __cdecl _fdclass(float x) { (void)x; return 0; }
@@ -798,6 +820,14 @@ __asm__("\n"
     ".align 4\n"
     "__imp___fdsign:\n"
     "    .long __fdsign\n"
+    ".globl __imp__strnlen\n"
+    ".align 4\n"
+    "__imp__strnlen:\n"
+    "    .long _strnlen\n"
+    ".globl __imp___isctype\n"
+    ".align 4\n"
+    "__imp___isctype:\n"
+    "    .long __isctype\n"
     ".globl __imp____stdio_common_vsprintf\n"
     ".align 4\n"
     "__imp____stdio_common_vsprintf:\n"
@@ -1016,9 +1046,9 @@ build_modern() {
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
         CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e" \
         CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
-        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e"
+        CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
     # the assembler via Windows CreateProcess which requires the MinGW bin
