@@ -367,7 +367,21 @@ strip_kernel32_vista_imports() {
         [ -f "$spec" ] || continue
         sed -i -e '/SetThreadDescription/d' "$spec"
     done
-    echo "    Stripped Vista+ APIs and CRT from kernel32/ntdll specs"
+
+    # Strip Win2000+ user32 display W-version functions from user32.spec.
+    # Win98 only has the A-versions. Our kernel32_compat.c provides W→A wrappers.
+    for spec in dlls/user32/user32.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/EnumDisplayDevicesW/d' \
+               -e '/EnumDisplaySettingsExW/d' \
+               -e '/EnumDisplaySettingsW/d' \
+               -e '/GetMonitorInfoW/d' \
+               -e '/EnumDisplayMonitors/d' \
+               -e '/MonitorFromWindow/d' \
+               -e '/MonitorFromPoint/d' \
+               "$spec"
+    done
+    echo "    Stripped Vista+/Win2000+ APIs and CRT from kernel32/ntdll/user32 specs"
 
     # Strip from system MinGW import libs (objcopy on archive, no ARG_MAX)
     local strip_syms=()
@@ -385,6 +399,13 @@ strip_kernel32_vista_imports() {
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
         SetThreadDescription@8; do
+        strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
+    # Win2000+ user32 display functions (Win98 only has A-versions)
+    for api in \
+        EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
+        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # ntdll CRT functions (cdecl, no @N suffix) — resolve from msvcrt instead.
@@ -408,7 +429,9 @@ strip_kernel32_vista_imports() {
     for lib in /mingw32/lib/libkernel32.a \
                /mingw32/i686-w64-mingw32/lib/libkernel32.a \
                /mingw32/lib/libntdll.a \
-               /mingw32/i686-w64-mingw32/lib/libntdll.a; do
+               /mingw32/i686-w64-mingw32/lib/libntdll.a \
+               /mingw32/lib/libuser32.a \
+               /mingw32/i686-w64-mingw32/lib/libuser32.a; do
         [ -f "$lib" ] || continue
         local tmp="${TMPDIR:-/tmp}/strip_$$_$(date +%s).a"
         if objcopy "${strip_syms[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
@@ -464,6 +487,13 @@ strip_kernel32_vista_imports_wine() {
         SetThreadDescription@8; do
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
+    # Win2000+ user32 display functions (Win98 only has A-versions)
+    for api in \
+        EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
+        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
+        strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
     # CRT we stub locally — strip from ALL Wine import libs including ntdll.
     # _vsnprintf: stubbed locally because libwinecrt0.a needs __imp___vsnprintf
     #   and Wine's PE build links against emptied ucrtbase, not msvcrt.
@@ -486,7 +516,9 @@ strip_kernel32_vista_imports_wine() {
         dlls/ucrtbase/i386-windows/libucrtbase.a \
         dlls/ucrtbase/libucrtbase.a \
         dlls/msvcrt/i386-windows/libmsvcrt.a \
-        dlls/msvcrt/libmsvcrt.a; do
+        dlls/msvcrt/libmsvcrt.a \
+        dlls/user32/i386-windows/libuser32.a \
+        dlls/user32/libuser32.a; do
         [ -f "$lib" ] || continue
         local tmp="${TMPDIR:-/tmp}/strip_wine_$$_$(date +%s).a"
         if objcopy "${strip_all[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
@@ -770,6 +802,114 @@ typedef void *_locale_t;
 int __cdecl __stdio_common_vsprintf(_u64 o, char *b, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)b;(void)n;(void)f;(void)l;(void)a; return 0; }
 int __cdecl __stdio_common_vfprintf(_u64 o, void *p, const char *f, _locale_t l, void *a) { (void)o;(void)p;(void)f;(void)l;(void)a; return 0; }
 int __cdecl __stdio_common_vsscanf(_u64 o, const char *s, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)s;(void)n;(void)f;(void)l;(void)a; return -1; }
+
+/* ── Win98 user32 W-version display function wrappers ──────────────
+   EnumDisplayDevicesW, EnumDisplaySettingsW, EnumDisplaySettingsExW,
+   GetMonitorInfoW, EnumDisplayMonitors, MonitorFromWindow,
+   MonitorFromPoint require Windows 2000. Win98 only has A-versions.
+   Named wine_k32compat_* and redirected via -D preprocessor flags. */
+typedef struct {
+    unsigned char dmDeviceName[32];
+    unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    unsigned long dmFields;
+    unsigned long dmPosition_x, dmPosition_y;
+    unsigned long dmDisplayOrientation, dmDisplayFixedOutput;
+    unsigned short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    unsigned char dmFormName[32];
+    unsigned short dmLogPixels;
+    unsigned long dmBitsPerPel, dmPelsWidth, dmPelsHeight;
+    unsigned long dmDisplayFlags, dmDisplayFrequency;
+    unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
+    unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+} DEVMODEA_LOCAL;
+typedef struct {
+    unsigned short dmDeviceName[32];
+    unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    unsigned long dmFields;
+    unsigned long dmPosition_x, dmPosition_y;
+    unsigned long dmDisplayOrientation, dmDisplayFixedOutput;
+    unsigned short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    unsigned short dmFormName[32];
+    unsigned short dmLogPixels;
+    unsigned long dmBitsPerPel, dmPelsWidth, dmPelsHeight;
+    unsigned long dmDisplayFlags, dmDisplayFrequency;
+    unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
+    unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+} DEVMODEW_LOCAL;
+static void devmode_a_to_w(const DEVMODEA_LOCAL *a, DEVMODEW_LOCAL *w) {
+    int i;
+    memset(w, 0, sizeof(*w));
+    for(i = 0; i < 31 && a->dmDeviceName[i]; i++) w->dmDeviceName[i] = (unsigned short)a->dmDeviceName[i];
+    w->dmSpecVersion = a->dmSpecVersion; w->dmDriverVersion = a->dmDriverVersion;
+    w->dmSize = sizeof(*w); w->dmDriverExtra = a->dmDriverExtra; w->dmFields = a->dmFields;
+    w->dmPosition_x = a->dmPosition_x; w->dmPosition_y = a->dmPosition_y;
+    w->dmDisplayOrientation = a->dmDisplayOrientation; w->dmDisplayFixedOutput = a->dmDisplayFixedOutput;
+    w->dmColor = a->dmColor; w->dmDuplex = a->dmDuplex;
+    w->dmYResolution = a->dmYResolution; w->dmTTOption = a->dmTTOption; w->dmCollate = a->dmCollate;
+    for(i = 0; i < 31 && a->dmFormName[i]; i++) w->dmFormName[i] = (unsigned short)a->dmFormName[i];
+    w->dmLogPixels = a->dmLogPixels;
+    w->dmBitsPerPel = a->dmBitsPerPel; w->dmPelsWidth = a->dmPelsWidth; w->dmPelsHeight = a->dmPelsHeight;
+    w->dmDisplayFlags = a->dmDisplayFlags; w->dmDisplayFrequency = a->dmDisplayFrequency;
+    w->dmICMMethod = a->dmICMMethod; w->dmICMIntent = a->dmICMIntent;
+    w->dmMediaType = a->dmMediaType; w->dmDitherType = a->dmDitherType;
+    w->dmReserved1 = a->dmReserved1; w->dmReserved2 = a->dmReserved2;
+    w->dmPanningWidth = a->dmPanningWidth; w->dmPanningHeight = a->dmPanningHeight;
+}
+int __stdcall EnumDisplaySettingsA(const char *, unsigned long, void *);
+int __stdcall wine_k32compat_EDS_W(const unsigned short *dev, unsigned long mode, void *dm_out)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dma, 0, sizeof(dma)); dma.dmSize = sizeof(dma);
+    if(!EnumDisplaySettingsA(dev?devA:NULL, mode, &dma)) return 0;
+    devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
+}
+int __stdcall EnumDisplaySettingsExA(const char *, unsigned long, void *, unsigned long);
+int __stdcall wine_k32compat_EDSE_W(const unsigned short *dev, unsigned long mode, void *dm_out, unsigned long flags)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dma, 0, sizeof(dma)); dma.dmSize = sizeof(dma);
+    if(!EnumDisplaySettingsExA(dev?devA:NULL, mode, &dma, flags)) return 0;
+    devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
+}
+int __stdcall EnumDisplayDevicesA(const char *, unsigned long, void *, unsigned long);
+int __stdcall wine_k32compat_EDD_W(const unsigned short *dev, unsigned long idx, void *dd_out, unsigned long flags)
+{
+    struct { unsigned long cb; unsigned char dn[32]; unsigned char ds[128]; unsigned long sf;
+             unsigned char did[128]; unsigned char dk[128]; } dda;
+    int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dda, 0, sizeof(dda)); dda.cb = sizeof(dda);
+    if(!EnumDisplayDevicesA(dev?devA:NULL, idx, &dda, flags)) return 0;
+    unsigned long sf = dda.sf;
+    memset(dd_out, 0, 840); *(unsigned long*)dd_out = 840;
+    for(i=0; i<31 && dda.dn[i]; i++) ((unsigned short*)((char*)dd_out+4))[i] = dda.dn[i];
+    for(i=0; i<127 && dda.ds[i]; i++) ((unsigned short*)((char*)dd_out+68))[i] = dda.ds[i];
+    *(unsigned long*)((char*)dd_out+324) = sf;
+    for(i=0; i<127 && dda.did[i]; i++) ((unsigned short*)((char*)dd_out+328))[i] = dda.did[i];
+    for(i=0; i<127 && dda.dk[i]; i++) ((unsigned short*)((char*)dd_out+584))[i] = dda.dk[i];
+    return 1;
+}
+unsigned long __stdcall GetSystemMetrics(int);
+int __stdcall wine_k32compat_GMI_W(void *hmon, void *lpmi)
+{
+    unsigned long *mi = (unsigned long*)lpmi;
+    if(!mi) return 0;
+    memset(mi, 0, 40);
+    mi[0] = 40; mi[3] = GetSystemMetrics(0); mi[4] = GetSystemMetrics(1);
+    mi[7] = mi[3]; mi[8] = mi[4]; mi[9] = 1;
+    return 1;
+}
+typedef int (__stdcall *MONITORENUMPROC)(void*, void*, unsigned long*, unsigned long);
+int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITORENUMPROC cb, unsigned long data)
+{
+    if(!cb) return 0;
+    unsigned long rect[4] = {0, 0, GetSystemMetrics(0), GetSystemMetrics(1)};
+    cb((void*)1, (void*)0, rect, data); return 1;
+}
+void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
+void * __stdcall wine_k32compat_MFP(unsigned long x, unsigned long y, unsigned long flags) { return (void*)1; }
 
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
@@ -1070,6 +1210,34 @@ build_modern() {
         done
     done
 
+    # Redirect Win2000+ user32 W-version display functions to compat wrappers.
+    # These functions don't exist on Win98 — only A-versions are available.
+    for dll in ddraw wined3d d3d9 d3d8; do
+        for f in dlls/$dll/*.c; do
+            [ -f "$f" ] || continue
+            case "$f" in */kernel32_compat.c) continue ;; esac
+            local changed=0
+            for func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
+                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint; do
+                grep -q "$func" "$f" 2>/dev/null || continue
+                local compat=wine_k32compat_$(echo "$func" | sed 's/\([A-Z]\)/_\l\1/g;s/^_//;s/__/_/' | tr '[:upper:]' '[:lower:]')
+                # Map function names to compat names
+                case "$func" in
+                    EnumDisplayDevicesW) compat=wine_k32compat_EDD_W ;;
+                    EnumDisplaySettingsW) compat=wine_k32compat_EDS_W ;;
+                    EnumDisplaySettingsExW) compat=wine_k32compat_EDSE_W ;;
+                    GetMonitorInfoW) compat=wine_k32compat_GMI_W ;;
+                    EnumDisplayMonitors) compat=wine_k32compat_EDM ;;
+                    MonitorFromWindow) compat=wine_k32compat_MFW ;;
+                    MonitorFromPoint) compat=wine_k32compat_MFP ;;
+                esac
+                sed -i "1i #define $func $compat" "$f"
+                changed=1
+            done
+            [ "$changed" = 1 ] && echo "    Redirected user32 W-funcs in $f"
+        done
+    done
+
     echo "    Configuring (native PE mode on MSYS2)..."
     CROSSCC=gcc ./configure \
         --enable-archs=i386 \
@@ -1080,9 +1248,9 @@ build_modern() {
         --without-pcap --without-pulse --without-sane \
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
-        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e" \
-        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
+        LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12" \
+        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
         CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
@@ -1221,6 +1389,32 @@ build_legacy() {
         done
     done
 
+    # Redirect Win2000+ user32 W-version display functions to compat wrappers.
+    for dll in ddraw wined3d d3d9 d3d8; do
+        for f in dlls/$dll/*.c; do
+            [ -f "$f" ] || continue
+            case "$f" in */kernel32_compat.c) continue ;; esac
+            local changed=0
+            for func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
+                        GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint; do
+                grep -q "$func" "$f" 2>/dev/null || continue
+                local compat
+                case "$func" in
+                    EnumDisplayDevicesW) compat=wine_k32compat_EDD_W ;;
+                    EnumDisplaySettingsW) compat=wine_k32compat_EDS_W ;;
+                    EnumDisplaySettingsExW) compat=wine_k32compat_EDSE_W ;;
+                    GetMonitorInfoW) compat=wine_k32compat_GMI_W ;;
+                    EnumDisplayMonitors) compat=wine_k32compat_EDM ;;
+                    MonitorFromWindow) compat=wine_k32compat_MFW ;;
+                    MonitorFromPoint) compat=wine_k32compat_MFP ;;
+                esac
+                sed -i "1i #define $func $compat" "$f"
+                changed=1
+            done
+            [ "$changed" = 1 ] && echo "    Redirected user32 W-funcs in $f"
+        done
+    done
+
     echo "    Configuring (legacy winegcc mode)..."
     ./configure \
         --without-x \
@@ -1230,7 +1424,7 @@ build_legacy() {
         --without-pcap --without-pulse --without-sane --without-oss \
         --without-vulkan \
         --disable-shared --enable-static \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP" \
         LDFLAGS="-static-libgcc -mcrtdll=msvcrt"
 
     # Strip Vista+ API from kernel32/ntdll specs — MUST be after configure,
@@ -1483,6 +1677,37 @@ WGEOF
     find . -name 'libwine.dll' -delete 2>/dev/null
     make -j"$NPROC" -C dlls/winecrt0
 
+    # Re-strip CRT from ntdll.spec right before import lib generation.
+    # Earlier make steps may have regenerated specs from .spec.in.
+    for spec in dlls/ntdll/ntdll.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/^@.*\bfloor\b/d' -e '/^@.*\bceil\b/d' -e '/^@.*\bfabs\b/d' \
+               -e '/^@.*\bsqrt\b/d' -e '/^@.*\bsin\b/d' -e '/^@.*\bcos\b/d' \
+               -e '/^@.*\btan\b/d' -e '/^@.*\batan\b/d' -e '/^@.*\batan2\b/d' \
+               -e '/^@.*\bmodf\b/d' -e '/^@.*\bldexp\b/d' \
+               -e '/^@.*\bexp\b/d' -e '/^@.*\blog\b/d' -e '/^@.*\bpow\b/d' \
+               -e '/^@.*\bsprintf\b/d' -e '/^@.*\bmemcpy\b/d' \
+               -e '/^@.*\bstrlen\b/d' -e '/^@.*\bmemset\b/d' -e '/^@.*\bstrcmp\b/d' \
+               -e '/^@.*\bmemcpy\b/d' -e '/^@.*\bstrcpy\b/d' -e '/^@.*\bstrcat\b/d' \
+               "$spec"
+        echo "    Re-stripped math/CRT from $spec before import lib generation"
+    done
+
+    # Re-strip Win2000+ user32 W-version display functions from user32.spec.
+    # These functions don't exist on Win98 — only A-versions are available.
+    for spec in dlls/user32/user32.spec; do
+        [ -f "$spec" ] || continue
+        sed -i -e '/EnumDisplayDevicesW/d' \
+               -e '/EnumDisplaySettingsExW/d' \
+               -e '/EnumDisplaySettingsW/d' \
+               -e '/GetMonitorInfoW/d' \
+               -e '/EnumDisplayMonitors/d' \
+               -e '/MonitorFromWindow/d' \
+               -e '/MonitorFromPoint/d' \
+               "$spec"
+        echo "    Re-stripped Win2000+ user32 funcs from $spec before import lib generation"
+    done
+
     # Generate all import libs needed by wined3d/d3d9/d3d8/ddraw
     generate_import_libs
 
@@ -1555,6 +1780,26 @@ WGEOF
         if objcopy "${strip_legacy_k32[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
             mv "$tmp" "$lib"
             echo "    Stripped Vista+ APIs from Wine-generated kernel32 import lib"
+        else
+            rm -f "$tmp"
+        fi
+    done
+
+    # Strip Win2000+ user32 W-version display functions from Wine-generated
+    # user32 import lib. Spec stripping may not stick after make regenerates.
+    local strip_legacy_user32=()
+    for api in \
+        EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
+        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
+        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12; do
+        strip_legacy_user32+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
+    done
+    for lib in dlls/user32/libuser32.a; do
+        [ -f "$lib" ] || continue
+        local tmp="${TMPDIR:-/tmp}/strip_legacy_user32_$$_$(date +%s).a"
+        if objcopy "${strip_legacy_user32[@]}" "$lib" "$tmp" 2>/dev/null && [ -f "$tmp" ]; then
+            mv "$tmp" "$lib"
+            echo "    Stripped Win2000+ user32 funcs from Wine-generated user32 import lib"
         else
             rm -f "$tmp"
         fi
@@ -1724,6 +1969,29 @@ int CDECL __stdio_common_vfwprintf_s(unsigned __int64 o,
 MSEOF
 }
 
+# ── Patch PE headers for Windows 98 ────────────────────────────────
+patch_pe_win98() {
+    local outdir=$1
+    python3 -c "
+import struct, glob, os
+for dll in glob.glob(os.path.join('$outdir', '*.dll')):
+    with open(dll, 'r+b') as f:
+        f.seek(0x3C)
+        pe_off = struct.unpack('<I', f.read(4))[0]
+        opt = pe_off + 24  # OptionalHeader start
+        # Subsystem at opt+68: set to 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI)
+        f.seek(opt + 68)
+        f.write(struct.pack('<H', 2))
+        # MajorSubsystemVersion at opt+72: set to 4
+        f.seek(opt + 72)
+        f.write(struct.pack('<H', 4))
+        # MinorSubsystemVersion at opt+74: set to 10
+        f.seek(opt + 74)
+        f.write(struct.pack('<H', 10))
+    print(f'    Patched PE: Subsystem=GUI, SubsystemVersion=4.10 ({os.path.basename(dll)})')
+" 2>/dev/null || echo "    WARNING: python3 PE patching failed"
+}
+
 # ── Collect output DLLs ─────────────────────────────────────────────
 collect_output() {
     local version=$1 build_msvcrt=$2 srcdir=$3 mode=$4
@@ -1774,6 +2042,12 @@ collect_output() {
 
     # Patch any remaining ucrtbase.dll imports → msvcrt.dll
     patch_ucrt_imports "$outdir"
+
+    # Patch PE headers for Windows 98 compatibility:
+    # Set Subsystem=2 (GUI) and SubsystemVersion=4.10 (Win98).
+    # MinGW defaults to Subsystem=3 (CONSOLE) and SubsystemVersion=0.32
+    # which may trigger Win98 kernel32 PE loader bugs.
+    patch_pe_win98 "$outdir"
 
     printf "Built on %s\n" "$(date '+%T %b %-e %Y')" > "$outdir/build-timestamp"
     chmod +x "$outdir/build-timestamp"

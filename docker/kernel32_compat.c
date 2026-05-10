@@ -169,6 +169,126 @@ int __cdecl _fdsign(float x) { (void)x; return 0; }
 /* UCRT __acrt_iob_func + __stdio_common_* are provided by ucrtcompat.o
    injected into libmsvcrt.a — do NOT duplicate here. */
 
+/* ── Win98 user32 W-version display function wrappers ────────────────
+   EnumDisplayDevicesW, EnumDisplaySettingsW, EnumDisplaySettingsExW,
+   GetMonitorInfoW, EnumDisplayMonitors require Windows 2000.
+   MonitorFromWindow, MonitorFromPoint also Win2000+ per MSDN.
+   Named wine_k32compat_* and redirected via -D preprocessor flags.
+   No __imp__ pointers needed — Wine calls these as regular functions,
+   not via __declspec(dllimport). Stripping from user32.spec and
+   libuser32.a ensures the linker uses our local implementations. */
+
+typedef struct {
+    unsigned char dmDeviceName[32];
+    unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    unsigned long dmFields;
+    unsigned long dmPosition_x, dmPosition_y;
+    unsigned long dmDisplayOrientation, dmDisplayFixedOutput;
+    unsigned short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    unsigned char dmFormName[32];
+    unsigned short dmLogPixels;
+    unsigned long dmBitsPerPel, dmPelsWidth, dmPelsHeight;
+    unsigned long dmDisplayFlags, dmDisplayFrequency;
+    unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
+    unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+} DEVMODEA_LOCAL;
+
+typedef struct {
+    unsigned short dmDeviceName[32];
+    unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    unsigned long dmFields;
+    unsigned long dmPosition_x, dmPosition_y;
+    unsigned long dmDisplayOrientation, dmDisplayFixedOutput;
+    unsigned short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    unsigned short dmFormName[32];
+    unsigned short dmLogPixels;
+    unsigned long dmBitsPerPel, dmPelsWidth, dmPelsHeight;
+    unsigned long dmDisplayFlags, dmDisplayFrequency;
+    unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
+    unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+} DEVMODEW_LOCAL;
+
+static void devmode_a_to_w(const DEVMODEA_LOCAL *a, DEVMODEW_LOCAL *w) {
+    int i;
+    memset(w, 0, sizeof(*w));
+    for(i = 0; i < 31 && a->dmDeviceName[i]; i++) w->dmDeviceName[i] = (unsigned short)a->dmDeviceName[i];
+    w->dmSpecVersion = a->dmSpecVersion; w->dmDriverVersion = a->dmDriverVersion;
+    w->dmSize = sizeof(*w); w->dmDriverExtra = a->dmDriverExtra; w->dmFields = a->dmFields;
+    w->dmPosition_x = a->dmPosition_x; w->dmPosition_y = a->dmPosition_y;
+    w->dmDisplayOrientation = a->dmDisplayOrientation; w->dmDisplayFixedOutput = a->dmDisplayFixedOutput;
+    w->dmColor = a->dmColor; w->dmDuplex = a->dmDuplex;
+    w->dmYResolution = a->dmYResolution; w->dmTTOption = a->dmTTOption; w->dmCollate = a->dmCollate;
+    for(i = 0; i < 31 && a->dmFormName[i]; i++) w->dmFormName[i] = (unsigned short)a->dmFormName[i];
+    w->dmLogPixels = a->dmLogPixels;
+    w->dmBitsPerPel = a->dmBitsPerPel; w->dmPelsWidth = a->dmPelsWidth; w->dmPelsHeight = a->dmPelsHeight;
+    w->dmDisplayFlags = a->dmDisplayFlags; w->dmDisplayFrequency = a->dmDisplayFrequency;
+    w->dmICMMethod = a->dmICMMethod; w->dmICMIntent = a->dmICMIntent;
+    w->dmMediaType = a->dmMediaType; w->dmDitherType = a->dmDitherType;
+    w->dmReserved1 = a->dmReserved1; w->dmReserved2 = a->dmReserved2;
+    w->dmPanningWidth = a->dmPanningWidth; w->dmPanningHeight = a->dmPanningHeight;
+}
+
+int __stdcall EnumDisplaySettingsA(const char *, unsigned long, void *);
+int __stdcall wine_k32compat_EDS_W(const unsigned short *dev, unsigned long mode, void *dm_out)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dma, 0, sizeof(dma)); dma.dmSize = sizeof(dma);
+    if(!EnumDisplaySettingsA(dev?devA:NULL, mode, &dma)) return 0;
+    devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
+}
+
+int __stdcall EnumDisplaySettingsExA(const char *, unsigned long, void *, unsigned long);
+int __stdcall wine_k32compat_EDSE_W(const unsigned short *dev, unsigned long mode, void *dm_out, unsigned long flags)
+{
+    DEVMODEA_LOCAL dma; int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dma, 0, sizeof(dma)); dma.dmSize = sizeof(dma);
+    if(!EnumDisplaySettingsExA(dev?devA:NULL, mode, &dma, flags)) return 0;
+    devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
+}
+
+int __stdcall EnumDisplayDevicesA(const char *, unsigned long, void *, unsigned long);
+int __stdcall wine_k32compat_EDD_W(const unsigned short *dev, unsigned long idx, void *dd_out, unsigned long flags)
+{
+    struct { unsigned long cb; unsigned char dn[32]; unsigned char ds[128]; unsigned long sf;
+             unsigned char did[128]; unsigned char dk[128]; } dda;
+    int i; char devA[64] = {0};
+    if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
+    memset(&dda, 0, sizeof(dda)); dda.cb = sizeof(dda);
+    if(!EnumDisplayDevicesA(dev?devA:NULL, idx, &dda, flags)) return 0;
+    unsigned long sf = dda.sf;
+    memset(dd_out, 0, 840); *(unsigned long*)dd_out = 840;
+    for(i=0; i<31 && dda.dn[i]; i++) ((unsigned short*)((char*)dd_out+4))[i] = dda.dn[i];
+    for(i=0; i<127 && dda.ds[i]; i++) ((unsigned short*)((char*)dd_out+68))[i] = dda.ds[i];
+    *(unsigned long*)((char*)dd_out+324) = sf;
+    for(i=0; i<127 && dda.did[i]; i++) ((unsigned short*)((char*)dd_out+328))[i] = dda.did[i];
+    for(i=0; i<127 && dda.dk[i]; i++) ((unsigned short*)((char*)dd_out+584))[i] = dda.dk[i];
+    return 1;
+}
+
+unsigned long __stdcall GetSystemMetrics(int);
+int __stdcall wine_k32compat_GMI_W(void *hmon, void *lpmi)
+{
+    unsigned long *mi = (unsigned long*)lpmi;
+    if(!mi) return 0;
+    memset(mi, 0, 40);
+    mi[0] = 40; mi[3] = GetSystemMetrics(0); mi[4] = GetSystemMetrics(1);
+    mi[7] = mi[3]; mi[8] = mi[4]; mi[9] = 1;
+    return 1;
+}
+
+typedef int (__stdcall *MONITORENUMPROC)(void*, void*, unsigned long*, unsigned long);
+int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITORENUMPROC cb, unsigned long data)
+{
+    if(!cb) return 0;
+    unsigned long rect[4] = {0, 0, GetSystemMetrics(0), GetSystemMetrics(1)};
+    cb((void*)1, (void*)0, rect, data); return 1;
+}
+
+void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
+void * __stdcall wine_k32compat_MFP(unsigned long x, unsigned long y, unsigned long flags) { return (void*)1; }
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp___initterm\n"
