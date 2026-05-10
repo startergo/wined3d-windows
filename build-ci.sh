@@ -800,9 +800,7 @@ int __cdecl _fdsign(float x) { (void)x; return 0; }
 /* --- UCRT-specific printf/scanf (not in msvcrt.dll) ---
    Used by vkd3d and Wine's CRT. No-op stubs. */
 typedef unsigned long long _u64;
-#ifndef _LOCALE_T_DEFINED
-typedef void *_locale_t;
-#endif
+/* _locale_t provided by system headers via #include <string.h> → corecrt.h */
 int __cdecl __stdio_common_vsprintf(_u64 o, char *b, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)b;(void)n;(void)f;(void)l;(void)a; return 0; }
 int __cdecl __stdio_common_vfprintf(_u64 o, void *p, const char *f, _locale_t l, void *a) { (void)o;(void)p;(void)f;(void)l;(void)a; return 0; }
 int __cdecl __stdio_common_vsscanf(_u64 o, const char *s, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)s;(void)n;(void)f;(void)l;(void)a; return -1; }
