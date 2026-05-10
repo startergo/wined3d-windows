@@ -606,6 +606,8 @@ create_kernel32_compat() {
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
 /* Win98-compatible stubs for Vista+/Win2000+ kernel32/ntdll APIs.
    Each provides the function + __imp__ pointer for __declspec(dllimport). */
+#include <string.h>
+#include <stddef.h>
 typedef unsigned long DWORD;
 typedef unsigned long long DWORD64;
 typedef unsigned short WCHAR;
@@ -879,10 +881,11 @@ int __stdcall wine_k32compat_EDD_W(const unsigned short *dev, unsigned long idx,
     struct { unsigned long cb; unsigned char dn[32]; unsigned char ds[128]; unsigned long sf;
              unsigned char did[128]; unsigned char dk[128]; } dda;
     int i; char devA[64] = {0};
+    unsigned long sf;
     if(dev) { for(i=0; i<63 && dev[i]; i++) devA[i]=(char)dev[i]; }
     memset(&dda, 0, sizeof(dda)); dda.cb = sizeof(dda);
     if(!EnumDisplayDevicesA(dev?devA:NULL, idx, &dda, flags)) return 0;
-    unsigned long sf = dda.sf;
+    sf = dda.sf;
     memset(dd_out, 0, 840); *(unsigned long*)dd_out = 840;
     for(i=0; i<31 && dda.dn[i]; i++) ((unsigned short*)((char*)dd_out+4))[i] = dda.dn[i];
     for(i=0; i<127 && dda.ds[i]; i++) ((unsigned short*)((char*)dd_out+68))[i] = dda.ds[i];
@@ -904,8 +907,9 @@ int __stdcall wine_k32compat_GMI_W(void *hmon, void *lpmi)
 typedef int (__stdcall *MONITORENUMPROC)(void*, void*, unsigned long*, unsigned long);
 int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITORENUMPROC cb, unsigned long data)
 {
+    unsigned long rect[4];
     if(!cb) return 0;
-    unsigned long rect[4] = {0, 0, GetSystemMetrics(0), GetSystemMetrics(1)};
+    rect[0] = 0; rect[1] = 0; rect[2] = GetSystemMetrics(0); rect[3] = GetSystemMetrics(1);
     cb((void*)1, (void*)0, rect, data); return 1;
 }
 void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
