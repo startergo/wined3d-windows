@@ -1516,7 +1516,7 @@ build_legacy() {
             -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]wine\([[:space:]]\|$\)//g' \
             "$mf"
         # Replace -lwine with static archive path
-        sed -i 's/-lwine/..\/..\/libs\/wine\/wine-stubs.a/g' "$mf"
+        sed -i 's/-lwine\([[:space:]]\|$\)/..\/..\/libs\/wine\/wine-stubs.a\1/g' "$mf"
     done
 
     # D3DKMT stubs — prevent Vista+-only static imports from gdi32.dll

@@ -705,7 +705,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]libwine\([[:space:]]\|$\)//g' \
                 -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]wine\([[:space:]]\|$\)//g' \
                 "$mf"; \
-            sed -i 's/-lwine/..\/..\/lib\/libwine.a/g' "$mf"; \
+            sed -i 's/-lwine\([[:space:]]\|$\)/..\/..\/lib\/libwine.a\1/g' "$mf"; \
         done && \
         \
         # ── Spec stripping (after configure regenerates specs) ──────────────
