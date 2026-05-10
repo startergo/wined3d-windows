@@ -127,8 +127,12 @@ HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescriptio
 double __cdecl _copysign(double x, double y);
 float __cdecl _copysignf(float x, float y) { return (float)_copysign((double)x, (double)y); }
 
-/* --- floorf (Win98 msvcrt.dll only has floor double) --- */
-double __cdecl floor(double);
+/* --- floor + floorf (local impl prevents ntdll.dll import on MSYS2) --- */
+double __cdecl floor(double x) {
+    long long i = (long long)x;
+    double d = (double)i;
+    return d > x ? d - 1.0 : d;
+}
 float __cdecl floorf(float x) { return (float)floor((double)x); }
 
 /* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) --- */
@@ -345,6 +349,14 @@ __asm__("\n"
     ".align 4\n"
     "__imp___copysignf:\n"
     "    .long __copysignf\n"
+    ".globl __imp__floor\n"
+    ".align 4\n"
+    "__imp__floor:\n"
+    "    .long _floor\n"
+    ".globl __imp__floorf\n"
+    ".align 4\n"
+    "__imp__floorf:\n"
+    "    .long _floorf\n"
     ".globl __imp___fstat32\n"
     ".align 4\n"
     "__imp___fstat32:\n"
