@@ -874,7 +874,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         # and Makefile deps reference ../../dlls/foo/libfoo.a.
         # winebuild --implib can produce broken libs for older Wine versions,
         # so we always use the system MinGW import libs (which have all exports).
-        for dll in user32 gdi32 advapi32 kernel32 opengl32 ntdll setupapi; do \
+        for dll in user32 gdi32 advapi32 kernel32 opengl32 ntdll setupapi msvcrt; do \
             sys="/usr/i686-w64-mingw32/lib/lib$dll.a"; \
             [ -f "$sys" ] || continue; \
             mkdir -p "dlls/$dll"; \
