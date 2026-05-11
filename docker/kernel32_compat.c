@@ -167,8 +167,10 @@ int __cdecl _fdsign(float x) { (void)x; return 0; }
    MonitorFromWindow, MonitorFromPoint also Win2000+ per MSDN.
    Named wine_k32compat_* and redirected via -D preprocessor flags.
    No __imp__ pointers needed — Wine calls these as regular functions,
-   not via __declspec(dllimport). Stripping from user32.spec and
-   libuser32.a ensures the linker uses our local implementations. */
+   not via __declspec(dllimport). Stripping from user32.Spec and
+   libuser32.a ensures the linker uses our local implementations.
+   Only compiled for wined3d — d3d9/d3d8/ddraw don't link user32. */
+#ifdef K32COMPAT_DISPLAY_WRAPPERS
 
 typedef struct {
     unsigned char dmDeviceName[32];
@@ -332,6 +334,8 @@ void __stdcall wine_k32compat_FLAET(void *hLibModule, unsigned long dwExitCode)
     ExitThread(dwExitCode);
 }
 
+#endif /* K32COMPAT_DISPLAY_WRAPPERS — function bodies above */
+
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
     ".globl __imp__wine_k32compat_GMHEW@12\n"
@@ -414,7 +418,12 @@ __asm__("\n"
     /* __imp__ for UCRT stdio functions now in ucrtcompat.o (same .o as the
        function bodies) to prevent multiple-definition conflicts when both
        kernel32_compat.o and ucrtcompat.o end up in the same link. */
-    /* __imp__ pointers for user32 W→A wrappers */
+    ".text\n"
+);
+
+#ifdef K32COMPAT_DISPLAY_WRAPPERS
+/* __imp__ pointers for user32 W→A wrappers */
+__asm__("\n"
     ".globl __imp__wine_k32compat_EDD_W@16\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
@@ -475,3 +484,4 @@ __asm__("\n"
     "    .long _wine_k32compat_CDSE_W@20\n"
     ".text\n"
 );
+#endif /* K32COMPAT_DISPLAY_WRAPPERS */

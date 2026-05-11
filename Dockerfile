@@ -329,6 +329,9 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
                 sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "dlls/$dll/Makefile.in"; \
+            if [ "$dll" = "wined3d" ]; then \
+                sed -i '1i #define K32COMPAT_DISPLAY_WRAPPERS 1' "dlls/$dll/kernel32_compat.c"; \
+            fi; \
         done && \
         # ── Append UCRT compat to kernel32_compat.c for modern PE build ──
         # The spec-stripped Wine import libs don't provide __acrt_iob_func,
@@ -725,6 +728,9 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
                 sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "dlls/$dll/Makefile.in"; \
+            if [ "$dll" = "wined3d" ]; then \
+                sed -i '1i #define K32COMPAT_DISPLAY_WRAPPERS 1' "dlls/$dll/kernel32_compat.c"; \
+            fi; \
         done && \
         \
         # GetModuleHandleExW redirect (wined3d only)
