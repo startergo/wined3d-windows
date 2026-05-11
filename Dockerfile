@@ -471,6 +471,30 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             i686-w64-mingw32-ar rs "$lib" /tmp/ibspw_wine.o 2>/dev/null; \
         done && \
         \
+        # ── Inject UCRT compat stubs into Wine-generated msvcrt import lib ──
+        # The modern PE build links against Wine's msvcrt import lib but Wine
+        # code references UCRT symbols (__stdio_common_*, __acrt_iob_func)
+        # that don't exist in real Win98 msvcrt.dll. Provide local stubs that
+        # redirect to msvcrt.dll equivalents.
+        cat > /tmp/wine_ucrtcompat.c << 'UCRTEOF' && \
+        typedef unsigned long long _u64; typedef unsigned int _size; \
+        typedef void *_locale; typedef char _va_list_tag[4]; typedef void FILE; \
+        FILE * __cdecl __iob_func(void); \
+        int __cdecl _vsnprintf(char*,_size,const char*,...); \
+        int __cdecl __stdio_common_vsprintf(_u64 o,char *b,_size n,const char *f,_locale l,_va_list_tag *a){ return _vsnprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); } \
+        int __cdecl __stdio_common_vfprintf(_u64 o,FILE *p,const char *f,_locale l,_va_list_tag *a){ return 0; } \
+        int __cdecl __stdio_common_vsscanf(_u64 o,const char *s,_size n,const char *f,_locale l,_va_list_tag *a){ return -1; } \
+        void * __cdecl __acrt_iob_func(void) { return __iob_func(); } \
+        __asm__(".globl __imp____stdio_common_vsprintf\n.section .rdata,\"dr\"\n.align 4\n__imp____stdio_common_vsprintf:\n    .long ___stdio_common_vsprintf\n.globl __imp____stdio_common_vfprintf\n.align 4\n__imp____stdio_common_vfprintf:\n    .long ___stdio_common_vfprintf\n.globl __imp____stdio_common_vsscanf\n.align 4\n__imp____stdio_common_vsscanf:\n    .long ___stdio_common_vsscanf\n.globl __imp____acrt_iob_func\n.align 4\n__imp____acrt_iob_func:\n    .long ___acrt_iob_func\n.text\n"); \
+        UCRTEOF
+        i686-w64-mingw32-gcc -nostdinc -c -O2 -Wno-attributes \
+            -o /tmp/wine_ucrtcompat.o /tmp/wine_ucrtcompat.c && \
+        for lib in dlls/msvcrt/i386-windows/libmsvcrt.a \
+                   dlls/msvcrt/libmsvcrt.a; do \
+            [ -f "$lib" ] || continue; \
+            i686-w64-mingw32-ar rs "$lib" /tmp/wine_ucrtcompat.o 2>/dev/null; \
+        done && \
+        \
         # ── Build ──────────────────────────────────────────────────────────
         TARGETS="dlls/wined3d/i386-windows/wined3d.dll \
                  dlls/d3d9/i386-windows/d3d9.dll \

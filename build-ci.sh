@@ -540,14 +540,13 @@ strip_kernel32_vista_imports_wine() {
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # CRT we stub locally — strip from ALL Wine import libs including ntdll.
-    # _vsnprintf: stubbed locally because libwinecrt0.a needs __imp___vsnprintf
-    #   and Wine's PE build links against emptied ucrtbase, not msvcrt.
     # _copysignf: Win98 msvcrt only has _copysign (double), not float version.
     # __acrt_iob_func, _initterm, _initterm_e: UCRT functions not in Win98 msvcrt.
     # Note: _snprintf/_strnicmp/floor are in Win98 msvcrt — let them be imported
     # from msvcrt.dll. Strip from ntdll only (ntdll-specific section below).
-    for api in _vsnprintf \
-               _copysignf \
+    # Note: _vsnprintf is a real msvcrt.dll function — strip from kernel32/ntdll
+    # only (separate loop below), NOT from msvcrt where it's needed as import.
+    for api in _copysignf \
                __acrt_iob_func \
                _initterm _initterm_e; do
         strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
@@ -571,6 +570,25 @@ strip_kernel32_vista_imports_wine() {
             echo "    Stripped Vista+ symbols from Wine $lib"
         else
             rm -f "$tmp"
+        fi
+    done
+    # _vsnprintf: strip from kernel32/ntdll/ucrtbase (not a kernel/ntdll function)
+    # but keep in msvcrt (it IS a real msvcrt.dll function needed by libwinecrt0).
+    local _vsnprintf_tmp="${TMPDIR:-/tmp}/strip_vsnprintf_$$_$(date +%s).a"
+    for lib in \
+        dlls/kernel32/i386-windows/libkernel32.a \
+        dlls/kernel32/libkernel32.a \
+        dlls/ntdll/i386-windows/libntdll.a \
+        dlls/ntdll/libntdll.a \
+        dlls/ucrtbase/i386-windows/libucrtbase.a \
+        dlls/ucrtbase/libucrtbase.a \
+        dlls/user32/i386-windows/libuser32.a \
+        dlls/user32/libuser32.a; do
+        [ -f "$lib" ] || continue
+        if objcopy --strip-symbol=_vsnprintf --strip-symbol=__imp___vsnprintf "$lib" "$_vsnprintf_tmp" 2>/dev/null && [ -f "$_vsnprintf_tmp" ]; then
+            mv "$_vsnprintf_tmp" "$lib"
+        else
+            rm -f "$_vsnprintf_tmp"
         fi
     done
     # Basic CRT: strip from ntdll only — these are available from msvcrt.dll
@@ -1484,6 +1502,54 @@ IBSPEOF
             echo "    Injected ibspw_compat.o into Wine $lib"
     done
     rm -rf "$_ibspw_tmp"
+
+    # Inject UCRT compat stubs into Wine-generated msvcrt import lib.
+    # The modern PE build links against Wine's msvcrt import lib (via -mcrtdll=msvcrt)
+    # but Wine code references UCRT symbols (__stdio_common_*, __acrt_iob_func)
+    # that don't exist in real Win98 msvcrt.dll. Provide local implementations
+    # that redirect to msvcrt.dll equivalents.
+    local _ucrt_tmp=$(mktemp -d)
+    cat > "$_ucrt_tmp/wine_ucrtcompat.c" << 'UCRTEOF'
+typedef unsigned long long _u64;
+typedef unsigned int _uint;
+typedef unsigned int _size;
+typedef void *_locale;
+typedef char _va_list_tag[4];
+typedef void FILE;
+FILE * __cdecl __iob_func(void);
+int __cdecl _vsnprintf(char*,_size,const char*,...);
+int __cdecl __stdio_common_vsprintf(_u64 o,char *b,_size n,const char *f,_locale l,_va_list_tag *a){ return _vsnprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); }
+int __cdecl __stdio_common_vfprintf(_u64 o,FILE *p,const char *f,_locale l,_va_list_tag *a){ return 0; }
+int __cdecl __stdio_common_vsscanf(_u64 o,const char *s,_size n,const char *f,_locale l,_va_list_tag *a){ return -1; }
+void * __cdecl __acrt_iob_func(void) { return __iob_func(); }
+__asm__("\n"
+    ".globl __imp____stdio_common_vsprintf\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsprintf:\n"
+    "    .long ___stdio_common_vsprintf\n"
+    ".globl __imp____stdio_common_vfprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vfprintf:\n"
+    "    .long ___stdio_common_vfprintf\n"
+    ".globl __imp____stdio_common_vsscanf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsscanf:\n"
+    "    .long ___stdio_common_vsscanf\n"
+    ".globl __imp____acrt_iob_func\n"
+    ".align 4\n"
+    "__imp____acrt_iob_func:\n"
+    "    .long ___acrt_iob_func\n"
+    ".text\n"
+);
+UCRTEOF
+    gcc -nostdinc -c -O2 -Wno-attributes -o "$_ucrt_tmp/wine_ucrtcompat.o" "$_ucrt_tmp/wine_ucrtcompat.c"
+    for lib in dlls/msvcrt/i386-windows/libmsvcrt.a dlls/msvcrt/libmsvcrt.a; do
+        [ -f "$lib" ] || continue
+        ar rs "$lib" "$_ucrt_tmp/wine_ucrtcompat.o" 2>/dev/null && \
+            echo "    Injected wine_ucrtcompat.o into Wine $lib"
+    done
+    rm -rf "$_ucrt_tmp"
 
     local targets=(
         dlls/wined3d/i386-windows/wined3d.dll
