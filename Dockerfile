@@ -323,8 +323,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c; \
         fi && \
         \
-        # ── kernel32_compat.c (wined3d only — d3d8/d3d9/ddraw import from user32 directly) ──
-        for dll in wined3d; do \
+        # ── kernel32_compat.c (all DLLs — CFLAGS -DGetModuleHandleExW applies globally) ──
+        for dll in wined3d ddraw d3d9 d3d8; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
@@ -333,7 +333,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         # ── Append UCRT compat to kernel32_compat.c for modern PE build ──
         # The spec-stripped Wine import libs don't provide __acrt_iob_func,
         # __stdio_common_*, _vsnprintf. Compile directly into each DLL.
-        for dll in wined3d; do \
+        for dll in wined3d ddraw d3d9 d3d8; do \
             [ -f "dlls/$dll/kernel32_compat.c" ] || continue; \
             printf '%s\n' \
                 '' \
@@ -719,8 +719,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c; \
         fi && \
         \
-        # kernel32_compat.c (wined3d only — d3d8/d3d9/ddraw import from user32 directly)
-        for dll in wined3d; do \
+        # kernel32_compat.c (all DLLs — CFLAGS -DGetModuleHandleExW applies globally)
+        for dll in wined3d ddraw d3d9 d3d8; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \

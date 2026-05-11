@@ -664,7 +664,7 @@ strip_kernel32_vista_imports_wine() {
 # references without importing from system DLLs that lack them on Win98.
 create_kernel32_compat() {
     local _build_mode="${1:-legacy}"
-    for dll in wined3d; do
+    for dll in wined3d ddraw d3d9 d3d8; do
         local mf="dlls/$dll/Makefile.in"
         [ -f "$mf" ] || continue
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
@@ -1688,6 +1688,7 @@ for arg in "\$@"; do
 done
 if [ \$compile_only -eq 0 ]; then
     args+=(-mcrtdll=msvcrt)
+    args+=(-Wl,-S)
     # Exclude wine_k32compat_GMHEW (GetModuleHandleExW redirect) stub from
     # DLL exports so it doesn't leak into import libs.
     args+=(-Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12)
@@ -2181,11 +2182,18 @@ patch_pe_win98() {
     local outdir=$1
     python3 -c "
 import struct, glob, os
-for dll in glob.glob(os.path.join('$outdir', '*.dll')):
+
+outdir = '${outdir}'
+for dll in glob.glob(os.path.join(outdir, '*.dll')):
     with open(dll, 'r+b') as f:
+        data = f.read()
         f.seek(0x3C)
         pe_off = struct.unpack('<I', f.read(4))[0]
+        coff = pe_off + 4
         opt = pe_off + 24  # OptionalHeader start
+        nsec = struct.unpack_from('<H', data, coff + 2)[0]
+        opt_size = struct.unpack_from('<H', data, coff + 16)[0]
+
         # Subsystem at opt+68: set to 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI)
         f.seek(opt + 68)
         f.write(struct.pack('<H', 2))
@@ -2195,7 +2203,107 @@ for dll in glob.glob(os.path.join('$outdir', '*.dll')):
         # MinorSubsystemVersion at opt+74: set to 10
         f.seek(opt + 74)
         f.write(struct.pack('<H', 10))
-    print(f'    Patched PE: Subsystem=GUI, SubsystemVersion=4.10 ({os.path.basename(dll)})')
+        # DllCharacteristics at opt+70: clear ASLR/DEP flags for Win98.
+        # CI DLLs have 0x0140 (DYNAMIC_BASE|NX_COMPAT), REF has 0x0540.
+        # Win98 doesn't support ASLR or DEP — clear all flags.
+        f.seek(opt + 70)
+        old_dllchar = struct.unpack_from('<H', data, opt + 70)[0]
+        f.seek(opt + 70)
+        f.write(struct.pack('<H', 0x0000))
+
+        # Strip GCC debug sections (/4, /14, /29, /41, /55, /67, /78, /94, /110)
+        # from the PE. These contain DWARF debug data that bloats the DLL
+        # (CI wined3d is 2.6x REF size) and can confuse Win98's PE loader.
+        # Only strip sections starting with '/' — other unknown sections
+        # (like .didat, .gfns) are Wine-specific and should be kept.
+        sec_off = opt + opt_size
+        strip_indices = []
+        stripped_names = []
+        for i in range(nsec):
+            s = sec_off + i * 40
+            name_bytes = data[s:s+8].split(b'\x00')[0]
+            if name_bytes.startswith(b'/'):
+                strip_indices.append(i)
+                stripped_names.append(name_bytes.decode('ascii', errors='replace'))
+
+        if strip_indices:
+            # Rebuild PE without stripped sections
+            section_alignment = struct.unpack_from('<I', data, opt + 32)[0]
+            file_alignment = struct.unpack_from('<I', data, opt + 36)[0]
+
+            kept = []
+            kept_data = []
+            for i in range(nsec):
+                if i in strip_indices:
+                    continue
+                s = sec_off + i * 40
+                name_b = data[s:s+8]
+                vsize = struct.unpack_from('<I', data, s+8)[0]
+                vrva = struct.unpack_from('<I', data, s+12)[0]
+                rsize = struct.unpack_from('<I', data, s+16)[0]
+                raddr = struct.unpack_from('<I', data, s+20)[0]
+                chars = struct.unpack_from('<I', data, s+36)[0]
+                sd = data[raddr:raddr+rsize] if rsize > 0 and raddr > 0 else b''
+                kept.append((name_b, vsize, vrva, rsize, raddr, chars))
+                kept_data.append(sd)
+
+            # New section count
+            new_nsec = len(kept)
+            f.seek(coff + 2)
+            f.write(struct.pack('<H', new_nsec))
+
+            # Recalculate file offsets for kept sections
+            header_end = sec_off + new_nsec * 40
+            header_end = ((header_end + file_alignment - 1) // file_alignment) * file_alignment
+            raw_ptr = header_end
+            new_imgsize = 0
+
+            for idx, (name_b, vsize, vrva, old_rsize, old_raddr, chars) in enumerate(kept):
+                sd = kept_data[idx]
+                new_rsize = ((len(sd) + file_alignment - 1) // file_alignment) * file_alignment if sd else 0
+                new_raddr = raw_ptr if new_rsize > 0 else 0
+                kept[idx] = (name_b, vsize, vrva, new_rsize, new_raddr, chars)
+                if new_rsize > 0:
+                    raw_ptr = new_raddr + new_rsize
+                end = ((vrva + max(vsize, new_rsize) + section_alignment - 1) // section_alignment) * section_alignment
+                if end > new_imgsize:
+                    new_imgsize = end
+
+            # Update ImageSize
+            f.seek(opt + 56)
+            f.write(struct.pack('<I', new_imgsize))
+
+            # Write new section table
+            for i, (name_b, vsize, vrva, rsize, raddr, chars) in enumerate(kept):
+                s = sec_off + i * 40
+                f.seek(s)
+                f.write(name_b)
+                f.write(struct.pack('<IIIIIIHHI', vsize, vrva, rsize, raddr, 0, 0, 0, 0, chars))
+
+            # Zero remaining old section entries
+            new_end = sec_off + new_nsec * 40
+            old_end = sec_off + nsec * 40
+            if new_end < old_end:
+                f.seek(new_end)
+                f.write(b'\x00' * (old_end - new_end))
+
+            # Write section data at new offsets
+            for idx, (name_b, vsize, vrva, rsize, raddr, chars) in enumerate(kept):
+                sd = kept_data[idx]
+                if sd and rsize > 0:
+                    padded = sd + b'\x00' * (rsize - len(sd)) if len(sd) < rsize else sd
+                    f.seek(raddr)
+                    f.write(padded)
+
+            # Truncate file to new size
+            f.truncate(raw_ptr)
+
+            sn = ','.join(stripped_names)
+            dc = f'0x{old_dllchar:04x}->0x0000'
+            print(f'    Patched PE: Subsystem=GUI, SubsysVer=4.10, DllChar={dc}, stripped [{sn}] ({os.path.basename(dll)})')
+        else:
+            dc = f'0x{old_dllchar:04x}->0x0000'
+            print(f'    Patched PE: Subsystem=GUI, SubsysVer=4.10, DllChar={dc} ({os.path.basename(dll)})')
 " 2>/dev/null || echo "    WARNING: python3 PE patching failed"
 }
 
