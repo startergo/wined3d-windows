@@ -142,24 +142,6 @@ float __cdecl floorf(float x) { return (float)floor((double)x); }
 /* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) --- */
 int __cdecl _fstat32(int fd, void *buf) { (void)fd; (void)buf; return -1; }
 
-/* --- _initterm / _initterm_e (CRT startup, not in Win98 msvcrt.dll) --- */
-typedef int (*_initfn)(void);
-void __cdecl _initterm(_initfn *begin, _initfn *end)
-{
-    for (; begin < end; begin++)
-        if (*begin) (*begin)();
-}
-int __cdecl _initterm_e(_initfn *begin, _initfn *end)
-{
-    for (; begin < end; begin++) {
-        if (*begin) {
-            int ret = (*begin)();
-            if (ret) return ret;
-        }
-    }
-    return 0;
-}
-
 /* --- strnlen (C11, not in Win98 msvcrt.dll) --- */
 unsigned int __cdecl strnlen(const char *s, unsigned int maxlen) {
     unsigned int i = 0;
@@ -352,15 +334,6 @@ void __stdcall wine_k32compat_FLAET(void *hLibModule, unsigned long dwExitCode)
 
 /* --- __imp__ pointers for __declspec(dllimport) callers --- */
 __asm__("\n"
-    ".globl __imp___initterm\n"
-    ".section .rdata,\"dr\"\n"
-    ".align 4\n"
-    "__imp___initterm:\n"
-    "    .long __initterm\n"
-    ".globl __imp___initterm_e\n"
-    ".align 4\n"
-    "__imp___initterm_e:\n"
-    "    .long __initterm_e\n"
     ".globl __imp__wine_k32compat_GMHEW@12\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
