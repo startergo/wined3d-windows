@@ -330,6 +330,59 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
                 sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "dlls/$dll/Makefile.in"; \
         done && \
+        # ── Append UCRT compat to kernel32_compat.c for modern PE build ──
+        # The spec-stripped Wine import libs don't provide __acrt_iob_func,
+        # __stdio_common_*, _vsnprintf. Compile directly into each DLL.
+        for dll in wined3d; do \
+            [ -f "dlls/$dll/kernel32_compat.c" ] || continue; \
+            printf '%s\n' \
+                '' \
+                '/* --- UCRT compat for modern PE build (not in stripped import libs) --- */' \
+                'typedef void FILE;' \
+                'FILE * __cdecl __iob_func(void);' \
+                'void * __cdecl __acrt_iob_func(void) { return __iob_func(); }' \
+                '' \
+                'int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {' \
+                '    if (s && n > 0) s[0] = 0;' \
+                '    return 0;' \
+                '}' \
+                'int __cdecl __stdio_common_vsprintf(unsigned long long o, char *b, unsigned int n, const char *f, void *l, void *a) {' \
+                '    (void)o; (void)l;' \
+                '    return _vsnprintf(b, n == (unsigned int)-1 ? 0x7fffffff : n, f, a);' \
+                '}' \
+                'int __cdecl __stdio_common_vfprintf(unsigned long long o, void *p, const char *f, void *l, void *a) {' \
+                '    (void)o; (void)p; (void)f; (void)l; (void)a; return 0;' \
+                '}' \
+                'int __cdecl __stdio_common_vsscanf(unsigned long long o, const char *s, unsigned int n, const char *f, void *l, void *a) {' \
+                '    (void)o; (void)s; (void)n; (void)f; (void)l; (void)a; return -1;' \
+                '}' \
+                '' \
+                '__asm__("\n"' \
+                '    ".globl __imp____acrt_iob_func\n"' \
+                '    ".section .rdata,\"dr\"\n"' \
+                '    ".align 4\n"' \
+                '    "__imp____acrt_iob_func:\n"' \
+                '    "    .long ___acrt_iob_func\n"' \
+                '    ".globl __imp___vsnprintf\n"' \
+                '    ".align 4\n"' \
+                '    "__imp___vsnprintf:\n"' \
+                '    "    .long __vsnprintf\n"' \
+                '    ".globl __imp____stdio_common_vsprintf\n"' \
+                '    ".align 4\n"' \
+                '    "__imp____stdio_common_vsprintf:\n"' \
+                '    "    .long ___stdio_common_vsprintf\n"' \
+                '    ".globl __imp____stdio_common_vfprintf\n"' \
+                '    ".align 4\n"' \
+                '    "__imp____stdio_common_vfprintf:\n"' \
+                '    "    .long ___stdio_common_vfprintf\n"' \
+                '    ".globl __imp____stdio_common_vsscanf\n"' \
+                '    ".align 4\n"' \
+                '    "__imp____stdio_common_vsscanf:\n"' \
+                '    "    .long ___stdio_common_vsscanf\n"' \
+                '    ".text\n"' \
+                ');' \
+                >> "dlls/$dll/kernel32_compat.c"; \
+        done && \
         \
         # ── GetModuleHandleExW redirect (wined3d only) ────────────────────
         for dll in wined3d; do \
@@ -471,29 +524,6 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             i686-w64-mingw32-ar rs "$lib" /tmp/ibspw_wine.o 2>/dev/null; \
         done && \
         \
-        # ── Inject UCRT compat stubs into Wine-generated msvcrt import lib ──
-        # The modern PE build links against Wine's msvcrt import lib but Wine
-        # code references UCRT symbols (__stdio_common_*, __acrt_iob_func)
-        # that don't exist in real Win98 msvcrt.dll. Provide local stubs that
-        # redirect to msvcrt.dll equivalents.
-        cat > /tmp/wine_ucrtcompat.c << 'UCRTEOF' && \
-        typedef unsigned long long _u64; typedef unsigned int _size; \
-        typedef void *_locale; typedef char _va_list_tag[4]; typedef void FILE; \
-        FILE * __cdecl __iob_func(void); \
-        int __cdecl _vsnprintf(char*,_size,const char*,...); \
-        int __cdecl __stdio_common_vsprintf(_u64 o,char *b,_size n,const char *f,_locale l,_va_list_tag *a){ return _vsnprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); } \
-        int __cdecl __stdio_common_vfprintf(_u64 o,FILE *p,const char *f,_locale l,_va_list_tag *a){ return 0; } \
-        int __cdecl __stdio_common_vsscanf(_u64 o,const char *s,_size n,const char *f,_locale l,_va_list_tag *a){ return -1; } \
-        void * __cdecl __acrt_iob_func(void) { return __iob_func(); } \
-        __asm__(".globl __imp____stdio_common_vsprintf\n.section .rdata,\"dr\"\n.align 4\n__imp____stdio_common_vsprintf:\n    .long ___stdio_common_vsprintf\n.globl __imp____stdio_common_vfprintf\n.align 4\n__imp____stdio_common_vfprintf:\n    .long ___stdio_common_vfprintf\n.globl __imp____stdio_common_vsscanf\n.align 4\n__imp____stdio_common_vsscanf:\n    .long ___stdio_common_vsscanf\n.globl __imp____acrt_iob_func\n.align 4\n__imp____acrt_iob_func:\n    .long ___acrt_iob_func\n.text\n"); \
-        UCRTEOF
-        i686-w64-mingw32-gcc -nostdinc -c -O2 -Wno-attributes \
-            -o /tmp/wine_ucrtcompat.o /tmp/wine_ucrtcompat.c && \
-        for lib in dlls/msvcrt/i386-windows/libmsvcrt.a \
-                   dlls/msvcrt/libmsvcrt.a; do \
-            [ -f "$lib" ] || continue; \
-            i686-w64-mingw32-ar rs "$lib" /tmp/wine_ucrtcompat.o 2>/dev/null; \
-        done && \
         \
         # ── Build ──────────────────────────────────────────────────────────
         TARGETS="dlls/wined3d/i386-windows/wined3d.dll \

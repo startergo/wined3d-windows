@@ -663,14 +663,13 @@ strip_kernel32_vista_imports_wine() {
 # Inject local stubs into each DLL so each resolves its own _imp__
 # references without importing from system DLLs that lack them on Win98.
 create_kernel32_compat() {
+    local _build_mode="${1:-legacy}"
     for dll in wined3d; do
         local mf="dlls/$dll/Makefile.in"
         [ -f "$mf" ] || continue
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
 /* Win98-compatible stubs for Vista+/Win2000+ kernel32/ntdll APIs.
-   Each provides the function + __imp__ pointer for __declspec(dllimport).
-   Adapted for Docker/Arch build: no __acrt_iob_func, __stdio_common_*,
-   _vsnprintf, or __lc_codepage (handled by ucrtcompat.o in libmsvcrt.a). */
+   Each provides the function + __imp__ pointer for __declspec(dllimport). */
 #include <string.h>
 #include <stddef.h>
 typedef unsigned long DWORD;
@@ -844,9 +843,6 @@ int __cdecl _fdclass(float x) { (void)x; return 0; }
 int __cdecl _dclass(double x) { (void)x; return 0; }
 int __cdecl _dsign(double x) { (void)x; return 0; }
 int __cdecl _fdsign(float x) { (void)x; return 0; }
-
-/* UCRT __acrt_iob_func + __stdio_common_* are provided by ucrtcompat.o
-   injected into libmsvcrt.a — do NOT duplicate here. */
 
 /* ── Win98 user32 W-version display function wrappers ────────────────
    EnumDisplayDevicesW, EnumDisplaySettingsW, EnumDisplaySettingsExW,
@@ -1171,6 +1167,59 @@ __asm__("\n"
 );
 
 K32EOF
+        # Modern PE build: add UCRT compat directly to kernel32_compat.c.
+        # The import libs are generated from stripped specs, so __acrt_iob_func,
+        # __stdio_common_*, _initterm, _vsnprintf are not available. Legacy build
+        # gets these from ucrtcompat.o injected into system libmsvcrt.a.
+        if [ "$_build_mode" = "modern" ]; then
+            cat >> "dlls/$dll/kernel32_compat.c" << 'UCRTEOF'
+
+/* --- UCRT compat for modern PE build (not in stripped import libs) --- */
+typedef void FILE;
+FILE * __cdecl __iob_func(void);
+void * __cdecl __acrt_iob_func(void) { return __iob_func(); }
+
+int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {
+    if (s && n > 0) s[0] = 0;
+    return 0;
+}
+int __cdecl __stdio_common_vsprintf(unsigned long long o, char *b, unsigned int n, const char *f, void *l, void *a) {
+    (void)o; (void)l;
+    return _vsnprintf(b, n == (unsigned int)-1 ? 0x7fffffff : n, f, a);
+}
+int __cdecl __stdio_common_vfprintf(unsigned long long o, void *p, const char *f, void *l, void *a) {
+    (void)o; (void)p; (void)f; (void)l; (void)a; return 0;
+}
+int __cdecl __stdio_common_vsscanf(unsigned long long o, const char *s, unsigned int n, const char *f, void *l, void *a) {
+    (void)o; (void)s; (void)n; (void)f; (void)l; (void)a; return -1;
+}
+
+__asm__("\n"
+    ".globl __imp____acrt_iob_func\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp____acrt_iob_func:\n"
+    "    .long ___acrt_iob_func\n"
+    ".globl __imp___vsnprintf\n"
+    ".align 4\n"
+    "__imp___vsnprintf:\n"
+    "    .long __vsnprintf\n"
+    ".globl __imp____stdio_common_vsprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsprintf:\n"
+    "    .long ___stdio_common_vsprintf\n"
+    ".globl __imp____stdio_common_vfprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vfprintf:\n"
+    "    .long ___stdio_common_vfprintf\n"
+    ".globl __imp____stdio_common_vsscanf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsscanf:\n"
+    "    .long ___stdio_common_vsscanf\n"
+    ".text\n"
+);
+UCRTEOF
+        fi
         grep -q 'kernel32_compat.c' "$mf" || sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "$mf"
     done
     echo "    Injected Win98 compat stubs into all DLLs"
@@ -1350,7 +1399,7 @@ build_modern() {
     create_ddraw_passthrough
 
     # Inject GetModuleHandleExW Win98 compat into all DLLs
-    create_kernel32_compat
+    create_kernel32_compat modern
 
     # Redirect GetModuleHandleExW calls to our compat wrapper (wined3d only).
     # d3d8/d3d9/ddraw don't use GetModuleHandleExW — they import GetModuleHandleA.
@@ -1502,54 +1551,6 @@ IBSPEOF
             echo "    Injected ibspw_compat.o into Wine $lib"
     done
     rm -rf "$_ibspw_tmp"
-
-    # Inject UCRT compat stubs into Wine-generated msvcrt import lib.
-    # The modern PE build links against Wine's msvcrt import lib (via -mcrtdll=msvcrt)
-    # but Wine code references UCRT symbols (__stdio_common_*, __acrt_iob_func)
-    # that don't exist in real Win98 msvcrt.dll. Provide local implementations
-    # that redirect to msvcrt.dll equivalents.
-    local _ucrt_tmp=$(mktemp -d)
-    cat > "$_ucrt_tmp/wine_ucrtcompat.c" << 'UCRTEOF'
-typedef unsigned long long _u64;
-typedef unsigned int _uint;
-typedef unsigned int _size;
-typedef void *_locale;
-typedef char _va_list_tag[4];
-typedef void FILE;
-FILE * __cdecl __iob_func(void);
-int __cdecl _vsnprintf(char*,_size,const char*,...);
-int __cdecl __stdio_common_vsprintf(_u64 o,char *b,_size n,const char *f,_locale l,_va_list_tag *a){ return _vsnprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); }
-int __cdecl __stdio_common_vfprintf(_u64 o,FILE *p,const char *f,_locale l,_va_list_tag *a){ return 0; }
-int __cdecl __stdio_common_vsscanf(_u64 o,const char *s,_size n,const char *f,_locale l,_va_list_tag *a){ return -1; }
-void * __cdecl __acrt_iob_func(void) { return __iob_func(); }
-__asm__("\n"
-    ".globl __imp____stdio_common_vsprintf\n"
-    ".section .rdata,\"dr\"\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsprintf:\n"
-    "    .long ___stdio_common_vsprintf\n"
-    ".globl __imp____stdio_common_vfprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vfprintf:\n"
-    "    .long ___stdio_common_vfprintf\n"
-    ".globl __imp____stdio_common_vsscanf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsscanf:\n"
-    "    .long ___stdio_common_vsscanf\n"
-    ".globl __imp____acrt_iob_func\n"
-    ".align 4\n"
-    "__imp____acrt_iob_func:\n"
-    "    .long ___acrt_iob_func\n"
-    ".text\n"
-);
-UCRTEOF
-    gcc -nostdinc -c -O2 -Wno-attributes -o "$_ucrt_tmp/wine_ucrtcompat.o" "$_ucrt_tmp/wine_ucrtcompat.c"
-    for lib in dlls/msvcrt/i386-windows/libmsvcrt.a dlls/msvcrt/libmsvcrt.a; do
-        [ -f "$lib" ] || continue
-        ar rs "$lib" "$_ucrt_tmp/wine_ucrtcompat.o" 2>/dev/null && \
-            echo "    Injected wine_ucrtcompat.o into Wine $lib"
-    done
-    rm -rf "$_ucrt_tmp"
 
     local targets=(
         dlls/wined3d/i386-windows/wined3d.dll
