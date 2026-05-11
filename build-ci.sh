@@ -189,6 +189,33 @@ int __cdecl __stdio_common_vswprintf_p(_u64 o,wchar_t *b,_size n,const wchar_t *
 int __cdecl __stdio_common_vsnwprintf_s(_u64 o,wchar_t *b,_size n,_size c,const wchar_t *f,_locale l,_va_list_tag *a){ return _vsnwprintf(b,c<n?c:n,f,*(void**)a); }
 int __cdecl __stdio_common_vfwprintf(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list_tag *a){ return 0; }
 int __cdecl __stdio_common_vfwprintf_s(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list_tag *a){ return 0; }
+/* __imp__ pointers for UCRT stdio functions. debug.c sprintf/snprintf expand to
+   __stdio_common_vsprintf via __declspec(dllimport), generating __imp__ references.
+   Must live here (with the function bodies) so both resolve from the same .o. */
+__asm__("\n"
+    ".globl __imp____stdio_common_vsprintf\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsprintf:\n"
+    "    .long ___stdio_common_vsprintf\n"
+    ".globl __imp____stdio_common_vfprintf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vfprintf:\n"
+    "    .long ___stdio_common_vfprintf\n"
+    ".globl __imp____stdio_common_vsscanf\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsscanf:\n"
+    "    .long ___stdio_common_vsscanf\n"
+    ".text\n"
+);
+UCRTEOF
+    gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ucrtcompat.o" "$tmpdir/ucrtcompat.c"
+    ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ucrtcompat.o"
+
+    # Separate __imp__IsBadStringPtrW@8 in its own .o so the linker can pull
+    # it in specifically when d3d9/d3d8 reference it (without needing other
+    # ucrtcompat symbols to trigger archive member selection).
+    cat > "$tmpdir/ibspw_compat.c" << 'IBSPEOF'
 /* IsBadStringPtrW@8 is a Win2K+ kernel32 function not available on Win98.
    Provide __imp__ alias that redirects to IsBadStringPtrA@8 (which Win98 has).
    The parameter types differ (LPCWSTR vs LPCSTR) but at the ABI level both are
@@ -201,9 +228,9 @@ __asm__("\n"
     "    .long _IsBadStringPtrA@8\n"
     ".text\n"
 );
-UCRTEOF
-    gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ucrtcompat.o" "$tmpdir/ucrtcompat.c"
-    ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ucrtcompat.o"
+IBSPEOF
+    gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ibspw_compat.o" "$tmpdir/ibspw_compat.c"
+    ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ibspw_compat.o"
 
     # Inject CRT compat stubs into libgcc.a for functions not in Win98's msvcrt.dll.
     # _copysignf → wraps _copysign (double, which Win98 has).
@@ -388,9 +415,7 @@ strip_kernel32_vista_imports() {
         sed -i -e '/EnumDisplayDevicesW/d' \
                -e '/EnumDisplaySettingsExW/d' \
                -e '/EnumDisplaySettingsW/d' \
-               -e '/GetMonitorInfoW/d' \
                -e '/EnumDisplayMonitors/d' \
-               -e '/MonitorFromWindow/d' \
                -e '/MonitorFromPoint/d' \
                -e '/ChangeDisplaySettingsExW/d' \
                "$spec"
@@ -417,10 +442,11 @@ strip_kernel32_vista_imports() {
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # Win2000+ user32 display functions (Win98 only has A-versions)
+    # Keep MonitorFromWindow@8 and GetMonitorInfoW@8 — ddraw imports them from user32.
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        EnumDisplaySettingsW@12 \
+        EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do
         strip_syms+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
@@ -505,10 +531,11 @@ strip_kernel32_vista_imports_wine() {
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
     # Win2000+ user32 display functions (Win98 only has A-versions)
+    # Keep MonitorFromWindow@8 and GetMonitorInfoW@8 — ddraw imports them from user32.
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        EnumDisplaySettingsW@12 \
+        EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do
         strip_all+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done
@@ -1062,23 +1089,9 @@ __asm__("\n"
     ".align 4\n"
     "__imp___isctype:\n"
     "    .long __isctype\n"
-    /* __imp__ for UCRT stdio functions (provided by ucrtcompat.o in libmsvcrt.a).
-       debug.c sprintf/snprintf expand to __stdio_common_vsprintf via
-       __declspec(dllimport), generating _imp__ references. ucrtcompat.o
-       provides the function but not the __imp__ pointer.
-       Note: __acrt_iob_func __imp__ is already in crt-git's libmsvcrt.a. */
-    ".globl __imp____stdio_common_vsprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsprintf:\n"
-    "    .long ___stdio_common_vsprintf\n"
-    ".globl __imp____stdio_common_vfprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vfprintf:\n"
-    "    .long ___stdio_common_vfprintf\n"
-    ".globl __imp____stdio_common_vsscanf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsscanf:\n"
-    "    .long ___stdio_common_vsscanf\n"
+    /* __imp__ for UCRT stdio functions now in ucrtcompat.o (same .o as the
+       function bodies) to prevent multiple-definition conflicts when both
+       kernel32_compat.o and ucrtcompat.o end up in the same link. */
     /* __imp__ pointers for user32 W→A wrappers */
     ".globl __imp__wine_k32compat_EDD_W@16\n"
     ".section .rdata,\"dr\"\n"
@@ -1830,9 +1843,7 @@ WGEOF
         sed -i -e '/EnumDisplayDevicesW/d' \
                -e '/EnumDisplaySettingsExW/d' \
                -e '/EnumDisplaySettingsW/d' \
-               -e '/GetMonitorInfoW/d' \
                -e '/EnumDisplayMonitors/d' \
-               -e '/MonitorFromWindow/d' \
                -e '/MonitorFromPoint/d' \
                "$spec"
         echo "    Re-stripped Win2000+ user32 funcs from $spec before import lib generation"
@@ -1921,8 +1932,8 @@ WGEOF
     local strip_legacy_user32=()
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        EnumDisplaySettingsW@12 \
+        EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do
         strip_legacy_user32+=(--strip-symbol "_${api}" --strip-symbol "__imp__${api}")
     done

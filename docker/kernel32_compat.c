@@ -438,23 +438,9 @@ __asm__("\n"
     ".align 4\n"
     "__imp___isctype:\n"
     "    .long __isctype\n"
-    /* __imp__ for UCRT stdio functions (provided by ucrtcompat.o in libmsvcrt.a).
-       debug.c sprintf/snprintf expand to __stdio_common_vsprintf via
-       __declspec(dllimport), generating _imp__ references. ucrtcompat.o
-       provides the function but not the __imp__ pointer.
-       Note: __acrt_iob_func __imp__ is already in crt-git's libmsvcrt.a. */
-    ".globl __imp____stdio_common_vsprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsprintf:\n"
-    "    .long ___stdio_common_vsprintf\n"
-    ".globl __imp____stdio_common_vfprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vfprintf:\n"
-    "    .long ___stdio_common_vfprintf\n"
-    ".globl __imp____stdio_common_vsscanf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsscanf:\n"
-    "    .long ___stdio_common_vsscanf\n"
+    /* __imp__ for UCRT stdio functions now in ucrtcompat.o (same .o as the
+       function bodies) to prevent multiple-definition conflicts when both
+       kernel32_compat.o and ucrtcompat.o end up in the same link. */
     /* __imp__ pointers for user32 W→A wrappers */
     ".globl __imp__wine_k32compat_EDD_W@16\n"
     ".section .rdata,\"dr\"\n"

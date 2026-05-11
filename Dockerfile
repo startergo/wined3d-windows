@@ -118,6 +118,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         'int __cdecl __stdio_common_vfwprintf(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list a){ return 0; }' \
         'int __cdecl __stdio_common_vfwprintf_s(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list a){ return 0; }' \
         > /tmp/ucrtcompat.c && \
+    echo '__asm__(".globl __imp____stdio_common_vsprintf\n.section .rdata,\"dr\"\n.align 4\n__imp____stdio_common_vsprintf:\n    .long ___stdio_common_vsprintf\n.globl __imp____stdio_common_vfprintf\n.align 4\n__imp____stdio_common_vfprintf:\n    .long ___stdio_common_vfprintf\n.globl __imp____stdio_common_vsscanf\n.align 4\n__imp____stdio_common_vsscanf:\n    .long ___stdio_common_vsscanf\n.text\n");' \
+        >> /tmp/ucrtcompat.c && \
     echo '__asm__(".globl __imp__IsBadStringPtrW@8\n.section .rdata,\"dr\"\n.align 4\n__imp__IsBadStringPtrW@8:\n    .long _IsBadStringPtrA@8\n.text\n");' \
         > /tmp/ibspw_compat.c && \
     /usr/bin/i686-w64-mingw32-gcc.orig -nostdinc -c \
@@ -169,8 +171,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
     _ustrip="" && \
     for api in \
         EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-        EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-        EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+        EnumDisplaySettingsW@12 \
+        EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do \
         _ustrip="$_ustrip --strip-symbol _${api} --strip-symbol __imp__${api}"; \
     done && \
@@ -435,9 +437,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i -e '/EnumDisplayDevicesW/d' \
                    -e '/EnumDisplaySettingsExW/d' \
                    -e '/EnumDisplaySettingsW/d' \
-                   -e '/GetMonitorInfoW/d' \
                    -e '/EnumDisplayMonitors/d' \
-                   -e '/MonitorFromWindow/d' \
                    -e '/MonitorFromPoint/d' \
                    -e '/ChangeDisplaySettingsExW/d' \
                    "$spec"; \
@@ -445,8 +445,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         _ustrip_w="" && \
         for api in \
             EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-            EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-            EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+            EnumDisplaySettingsW@12 \
+            EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do \
             _ustrip_w="$_ustrip_w --strip-symbol _${api} --strip-symbol __imp__${api}"; \
         done && \
@@ -789,9 +789,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i -e '/EnumDisplayDevicesW/d' \
                    -e '/EnumDisplaySettingsExW/d' \
                    -e '/EnumDisplaySettingsW/d' \
-                   -e '/GetMonitorInfoW/d' \
                    -e '/EnumDisplayMonitors/d' \
-                   -e '/MonitorFromWindow/d' \
                    -e '/MonitorFromPoint/d' \
                    -e '/ChangeDisplaySettingsExW/d' \
                    "$spec"; \
@@ -807,8 +805,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         _ustrip_w="" && \
         for api in \
             EnumDisplayDevicesW@16 EnumDisplaySettingsExW@16 \
-            EnumDisplaySettingsW@12 GetMonitorInfoW@8 \
-            EnumDisplayMonitors@16 MonitorFromWindow@8 MonitorFromPoint@12 \
+            EnumDisplaySettingsW@12 \
+            EnumDisplayMonitors@16 MonitorFromPoint@12 \
         ChangeDisplaySettingsExW@20; do \
             _ustrip_w="$_ustrip_w --strip-symbol _${api} --strip-symbol __imp__${api}"; \
         done && \
