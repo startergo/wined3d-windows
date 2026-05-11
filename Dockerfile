@@ -458,6 +458,18 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             mv "$_tmp" "$lib" || rm -f "$_tmp"; \
         done && \
         \
+        # ── Inject ibspw_compat.o into Wine-generated msvcrt import lib ───
+        # IsBadStringPtrW is stripped from kernel32.spec (Win2000+). d3d9/d3d8
+        # reference __imp__IsBadStringPtrW@8 — redirect to IsBadStringPtrA@8.
+        echo '__asm__(".globl __imp__IsBadStringPtrW@8\n.section .rdata,\"dr\"\n.align 4\n__imp__IsBadStringPtrW@8:\n    .long _IsBadStringPtrA@8\n.text\n");' \
+            > /tmp/ibspw_wine.c && \
+        i686-w64-mingw32-gcc -c -o /tmp/ibspw_wine.o /tmp/ibspw_wine.c && \
+        for lib in dlls/msvcrt/i386-windows/libmsvcrt.a \
+                   dlls/msvcrt/libmsvcrt.a; do \
+            [ -f "$lib" ] || continue; \
+            i686-w64-mingw32-ar rs "$lib" /tmp/ibspw_wine.o 2>/dev/null; \
+        done && \
+        \
         # ── Build ──────────────────────────────────────────────────────────
         TARGETS="dlls/wined3d/i386-windows/wined3d.dll \
                  dlls/d3d9/i386-windows/d3d9.dll \

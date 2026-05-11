@@ -1461,6 +1461,28 @@ build_modern() {
     echo "    Stripping Vista+ symbols from Wine-built import libs..."
     strip_kernel32_vista_imports_wine
 
+    # Inject ibspw_compat.o into Wine-generated msvcrt import lib so d3d9/d3d8
+    # can resolve __imp__IsBadStringPtrW@8 (stripped from kernel32, provided by
+    # our compat stub that redirects to IsBadStringPtrA@8).
+    local _ibspw_tmp=$(mktemp -d)
+    cat > "$_ibspw_tmp/ibspw_compat.c" << 'IBSPEOF'
+__asm__("\n"
+    ".globl __imp__IsBadStringPtrW@8\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp__IsBadStringPtrW@8:\n"
+    "    .long _IsBadStringPtrA@8\n"
+    ".text\n"
+);
+IBSPEOF
+    gcc -nostdinc -c -O2 -Wno-attributes -o "$_ibspw_tmp/ibspw_compat.o" "$_ibspw_tmp/ibspw_compat.c"
+    for lib in dlls/msvcrt/i386-windows/libmsvcrt.a dlls/msvcrt/libmsvcrt.a; do
+        [ -f "$lib" ] || continue
+        ar rs "$lib" "$_ibspw_tmp/ibspw_compat.o" 2>/dev/null && \
+            echo "    Injected ibspw_compat.o into Wine $lib"
+    done
+    rm -rf "$_ibspw_tmp"
+
     local targets=(
         dlls/wined3d/i386-windows/wined3d.dll
         dlls/d3d9/i386-windows/d3d9.dll
