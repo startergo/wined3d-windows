@@ -612,13 +612,19 @@ create_kernel32_compat() {
         [ -f "$mf" ] || continue
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'
 /* Win98-compatible stubs for Vista+/Win2000+ kernel32/ntdll APIs.
-   Each provides the function + __imp__ pointer for __declspec(dllimport). */
+   Each provides the function + __imp__ pointer for __declspec(dllimport).
+   Adapted for Docker/Arch build: no __acrt_iob_func, __stdio_common_*,
+   _vsnprintf, or __lc_codepage (handled by ucrtcompat.o in libmsvcrt.a). */
 #include <string.h>
 #include <stddef.h>
 typedef unsigned long DWORD;
 typedef unsigned long long DWORD64;
 typedef unsigned short WCHAR;
 typedef const WCHAR *LPCWSTR;
+
+/* winebuild-generated entry points reference _pei386_runtime_relocator
+   (MinGW CRT ASLR handler). Not needed for Wine DLLs — provide a no-op. */
+void _pei386_runtime_relocator(void) {}
 typedef unsigned long ULONG_PTR;
 typedef void *HMODULE;
 typedef int BOOL;
@@ -626,10 +632,7 @@ typedef int BOOL;
 #define __stdcall __attribute__((stdcall))
 #endif
 
-/* --- wine_k32compat_GMHEW (GetModuleHandleExW redirect) ---
-   Named differently to prevent __declspec(dllimport) from creating
-   an import table entry for GetModuleHandleExW from kernel32.dll.
-   Wine source files use #define GetModuleHandleExW wine_k32compat_GMHEW. */
+/* --- wine_k32compat_GMHEW (GetModuleHandleExW redirect) --- */
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
 HMODULE __stdcall GetModuleHandleA(const char *);
 typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
@@ -649,8 +652,7 @@ BOOL __stdcall wine_k32compat_GMHEW(DWORD flags, LPCWSTR name, HMODULE *module)
     return *module != 0;
 }
 
-/* --- GlobalMemoryStatusEx (Win2000+) ---
-   Falls back to GlobalMemoryStatus (Win95+). */
+/* --- GlobalMemoryStatusEx (Win2000+) --- */
 typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD dwTotalPhys; DWORD dwAvailPhys;
   DWORD dwTotalPageFile; DWORD dwAvailPageFile; DWORD dwTotalVirtual; DWORD dwAvailVirtual; } MEMSTATUS;
 typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD64 ullTotalPhys; DWORD64 ullAvailPhys;
@@ -673,8 +675,7 @@ BOOL __stdcall GlobalMemoryStatusEx(MEMSTATUSEX *lpBuffer)
     return 1;
 }
 
-/* --- RtlIsCriticalSectionLockedByThread (Vista+) ---
-   Checks if the critical section is owned by the calling thread. */
+/* --- RtlIsCriticalSectionLockedByThread (Vista+) --- */
 typedef struct _RTL_CRITICAL_SECTION { void *DebugInfo; long LockCount; long RecursionCount; void *OwningThread; void *LockSemaphore; DWORD SpinCount; } CRITSEC;
 DWORD __stdcall GetCurrentThreadId(void);
 BOOL __stdcall RtlIsCriticalSectionLockedByThread(CRITSEC *cs)
@@ -682,8 +683,7 @@ BOOL __stdcall RtlIsCriticalSectionLockedByThread(CRITSEC *cs)
     return cs && cs->OwningThread == (void *)(ULONG_PTR)GetCurrentThreadId() && cs->RecursionCount > 0;
 }
 
-/* --- InitOnceExecuteOnce (Vista+) ---
-   One-time init using InterlockedCompareExchange for thread safety. */
+/* --- InitOnceExecuteOnce (Vista+) --- */
 typedef long BOOL_CALL_ONCE(void *, void **);
 long __stdcall InterlockedCompareExchange(long *, long, long);
 BOOL __stdcall InitOnceExecuteOnce(void *init_once, BOOL_CALL_ONCE *init_fn, void *param, void **context)
@@ -695,8 +695,8 @@ BOOL __stdcall InitOnceExecuteOnce(void *init_once, BOOL_CALL_ONCE *init_fn, voi
     return 1;
 }
 
-/* --- ConditionVariable family (Vista+) ---
-   Implemented using Win98-compatible manual-reset events. */
+/* --- ConditionVariable family (Vista+) --- */
+/* Implemented using Win98-compatible manual-reset events. */
 typedef struct _CONDITION_VARIABLE { void *Ptr; } CONDITION_VARIABLE;
 void __stdcall LeaveCriticalSection(CRITSEC *);
 void __stdcall EnterCriticalSection(CRITSEC *);
@@ -734,28 +734,17 @@ unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC
     return 1;
 }
 
-/* --- SetThreadDescription (Windows 10+) ---
-   Sets a descriptive string for a thread. No-op on Win98. */
+/* --- SetThreadDescription (Windows 10+) --- */
 typedef long HRESULT;
 typedef void *HANDLE;
 typedef const unsigned short *PCWSTR;
 HRESULT __stdcall SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescription) { return 0; }
 
-/* --- _vsnprintf (needed by libwinecrt0.a debug.c) ---
-   Wine's PE build links libwinecrt0.a against the (emptied) ucrtbase import lib,
-   not msvcrt. libwinecrt0.a uses __declspec(dllimport) for _vsnprintf, creating
-   __imp___vsnprintf that must be resolved locally. No-op stub — debug output is
-   suppressed by __wine_dbg_get_channel_flags returning 0. */
-int __cdecl _vsnprintf(char *buf, unsigned int size, const char *fmt, ...)
-{
-    return 0;
-}
-
 /* --- _copysignf (Win98 msvcrt.dll only has _copysign double) --- */
 double __cdecl _copysign(double x, double y);
 float __cdecl _copysignf(float x, float y) { return (float)_copysign((double)x, (double)y); }
 
-/* --- floor (local impl prevents ntdll.dll floor import on MSYS2 MinGW) --- */
+/* --- floor + floorf (local impl prevents ntdll.dll import on MSYS2) --- */
 double __cdecl floor(double x) {
     long long i = (long long)x;
     double d = (double)i;
@@ -763,21 +752,10 @@ double __cdecl floor(double x) {
 }
 float __cdecl floorf(float x) { return (float)floor((double)x); }
 
-/* --- __lc_codepage (msvcrt data variable, not in reference imports) --- */
-unsigned int __lc_codepage = 437;
-
-/* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) ---
-   File status with 32-bit time_t. Stub returns failure. */
+/* --- _fstat32 (UCRT, not in Win98 msvcrt.dll) --- */
 int __cdecl _fstat32(int fd, void *buf) { (void)fd; (void)buf; return -1; }
 
-/* --- __acrt_iob_func (UCRT, not in Win98 msvcrt.dll) ---
-   Returns a dummy FILE slot — debug output is suppressed anyway. */
-static char _dummy_iob[96];
-void * __cdecl __acrt_iob_func(unsigned int i) { return (i < 3) ? _dummy_iob + i * 32 : 0; }
-
-/* --- _initterm / _initterm_e (CRT startup, not in Win98 msvcrt.dll) ---
-   Called by MinGW DLL startup to walk C++ initializer arrays.
-   _initterm calls each function; _initterm_e returns first error. */
+/* --- _initterm / _initterm_e (CRT startup, not in Win98 msvcrt.dll) --- */
 typedef int (*_initfn)(void);
 void __cdecl _initterm(_initfn *begin, _initfn *end)
 {
@@ -805,26 +783,24 @@ unsigned int __cdecl strnlen(const char *s, unsigned int maxlen) {
 /* --- _isctype (internal CRT helper, not in Win98 msvcrt.dll) --- */
 int __cdecl _isctype(int c, int mask) { (void)c; (void)mask; return 0; }
 
-/* --- UCRT-specific floating-point classification (not in msvcrt.dll) ---
-   Used by vkd3d (Vulkan shader compiler). No-op stubs. */
+/* --- UCRT-specific floating-point classification (not in msvcrt.dll) --- */
 int __cdecl _fdclass(float x) { (void)x; return 0; }
 int __cdecl _dclass(double x) { (void)x; return 0; }
 int __cdecl _dsign(double x) { (void)x; return 0; }
 int __cdecl _fdsign(float x) { (void)x; return 0; }
 
-/* --- UCRT-specific printf/scanf (not in msvcrt.dll) ---
-   Used by vkd3d and Wine's CRT. No-op stubs. */
-typedef unsigned long long _u64;
-/* _locale_t provided by system headers via #include <string.h> → corecrt.h */
-int __cdecl __stdio_common_vsprintf(_u64 o, char *b, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)b;(void)n;(void)f;(void)l;(void)a; return 0; }
-int __cdecl __stdio_common_vfprintf(_u64 o, void *p, const char *f, _locale_t l, void *a) { (void)o;(void)p;(void)f;(void)l;(void)a; return 0; }
-int __cdecl __stdio_common_vsscanf(_u64 o, const char *s, unsigned int n, const char *f, _locale_t l, void *a) { (void)o;(void)s;(void)n;(void)f;(void)l;(void)a; return -1; }
+/* UCRT __acrt_iob_func + __stdio_common_* are provided by ucrtcompat.o
+   injected into libmsvcrt.a — do NOT duplicate here. */
 
-/* ── Win98 user32 W-version display function wrappers ──────────────
+/* ── Win98 user32 W-version display function wrappers ────────────────
    EnumDisplayDevicesW, EnumDisplaySettingsW, EnumDisplaySettingsExW,
-   GetMonitorInfoW, EnumDisplayMonitors, MonitorFromWindow,
-   MonitorFromPoint require Windows 2000. Win98 only has A-versions.
-   Named wine_k32compat_* and redirected via -D preprocessor flags. */
+   GetMonitorInfoW, EnumDisplayMonitors require Windows 2000.
+   MonitorFromWindow, MonitorFromPoint also Win2000+ per MSDN.
+   Named wine_k32compat_* and redirected via -D preprocessor flags.
+   No __imp__ pointers needed — Wine calls these as regular functions,
+   not via __declspec(dllimport). Stripping from user32.spec and
+   libuser32.a ensures the linker uses our local implementations. */
+
 typedef struct {
     unsigned char dmDeviceName[32];
     unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
@@ -839,6 +815,7 @@ typedef struct {
     unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
     unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
 } DEVMODEA_LOCAL;
+
 typedef struct {
     unsigned short dmDeviceName[32];
     unsigned short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
@@ -853,6 +830,7 @@ typedef struct {
     unsigned long dmICMMethod, dmICMIntent, dmMediaType, dmDitherType;
     unsigned long dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
 } DEVMODEW_LOCAL;
+
 static void devmode_a_to_w(const DEVMODEA_LOCAL *a, DEVMODEW_LOCAL *w) {
     int i;
     memset(w, 0, sizeof(*w));
@@ -872,6 +850,7 @@ static void devmode_a_to_w(const DEVMODEA_LOCAL *a, DEVMODEW_LOCAL *w) {
     w->dmReserved1 = a->dmReserved1; w->dmReserved2 = a->dmReserved2;
     w->dmPanningWidth = a->dmPanningWidth; w->dmPanningHeight = a->dmPanningHeight;
 }
+
 int __stdcall EnumDisplaySettingsA(const char *, unsigned long, void *);
 int __stdcall wine_k32compat_EDS_W(const unsigned short *dev, unsigned long mode, void *dm_out)
 {
@@ -881,6 +860,7 @@ int __stdcall wine_k32compat_EDS_W(const unsigned short *dev, unsigned long mode
     if(!EnumDisplaySettingsA(dev?devA:NULL, mode, &dma)) return 0;
     devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
 }
+
 int __stdcall EnumDisplaySettingsExA(const char *, unsigned long, void *, unsigned long);
 int __stdcall wine_k32compat_EDSE_W(const unsigned short *dev, unsigned long mode, void *dm_out, unsigned long flags)
 {
@@ -890,6 +870,7 @@ int __stdcall wine_k32compat_EDSE_W(const unsigned short *dev, unsigned long mod
     if(!EnumDisplaySettingsExA(dev?devA:NULL, mode, &dma, flags)) return 0;
     devmode_a_to_w(&dma, (DEVMODEW_LOCAL*)dm_out); return 1;
 }
+
 int __stdcall EnumDisplayDevicesA(const char *, unsigned long, void *, unsigned long);
 int __stdcall wine_k32compat_EDD_W(const unsigned short *dev, unsigned long idx, void *dd_out, unsigned long flags)
 {
@@ -909,6 +890,7 @@ int __stdcall wine_k32compat_EDD_W(const unsigned short *dev, unsigned long idx,
     for(i=0; i<127 && dda.dk[i]; i++) ((unsigned short*)((char*)dd_out+584))[i] = dda.dk[i];
     return 1;
 }
+
 unsigned long __stdcall GetSystemMetrics(int);
 int __stdcall wine_k32compat_GMI_W(void *hmon, void *lpmi)
 {
@@ -919,6 +901,7 @@ int __stdcall wine_k32compat_GMI_W(void *hmon, void *lpmi)
     mi[7] = mi[3]; mi[8] = mi[4]; mi[9] = 1;
     return 1;
 }
+
 typedef int (__stdcall *MONITORENUMPROC)(void*, void*, unsigned long*, unsigned long);
 int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITORENUMPROC cb, unsigned long data)
 {
@@ -927,6 +910,7 @@ int __stdcall wine_k32compat_EDM(void *hdc, const unsigned long *lprc, MONITOREN
     rect[0] = 0; rect[1] = 0; rect[2] = GetSystemMetrics(0); rect[3] = GetSystemMetrics(1);
     cb((void*)1, (void*)0, rect, data); return 1;
 }
+
 void * __stdcall wine_k32compat_MFW(void *hwnd, unsigned long flags) { return (void*)1; }
 void * __stdcall wine_k32compat_MFP(unsigned long x, unsigned long y, unsigned long flags) { return (void*)1; }
 
@@ -1027,10 +1011,6 @@ __asm__("\n"
     ".align 4\n"
     "__imp__SetThreadDescription@8:\n"
     "    .long _SetThreadDescription@8\n"
-    ".globl __imp___vsnprintf\n"
-    ".align 4\n"
-    "__imp___vsnprintf:\n"
-    "    .long __vsnprintf\n"
     ".globl __imp___copysignf\n"
     ".align 4\n"
     "__imp___copysignf:\n"
@@ -1043,14 +1023,6 @@ __asm__("\n"
     ".align 4\n"
     "__imp__floorf:\n"
     "    .long _floorf\n"
-    ".globl __imp____acrt_iob_func\n"
-    ".align 4\n"
-    "__imp____acrt_iob_func:\n"
-    "    .long ___acrt_iob_func\n"
-    ".globl __imp____lc_codepage\n"
-    ".align 4\n"
-    "__imp____lc_codepage:\n"
-    "    .long ___lc_codepage\n"
     ".globl __imp___fstat32\n"
     ".align 4\n"
     "__imp___fstat32:\n"
@@ -1079,6 +1051,11 @@ __asm__("\n"
     ".align 4\n"
     "__imp___isctype:\n"
     "    .long __isctype\n"
+    /* __imp__ for UCRT stdio functions (provided by ucrtcompat.o in libmsvcrt.a).
+       debug.c sprintf/snprintf expand to __stdio_common_vsprintf via
+       __declspec(dllimport), generating _imp__ references. ucrtcompat.o
+       provides the function but not the __imp__ pointer.
+       Note: __acrt_iob_func __imp__ is already in crt-git's libmsvcrt.a. */
     ".globl __imp____stdio_common_vsprintf\n"
     ".align 4\n"
     "__imp____stdio_common_vsprintf:\n"
@@ -1153,6 +1130,18 @@ __asm__("\n"
     ".align 4\n"
     "__imp__ChangeDisplaySettingsExW@20:\n"
     "    .long _wine_k32compat_CDSE_W@20\n"
+    ".text\n"
+);
+
+/* __imp____acrt_iob_func: crt-git's libmsvcrt.a provides this in Docker builds.
+   MSYS2's libmsvcrt.a does not — add it here so __declspec(dllimport) resolves
+   to the local ucrtcompat.o implementation instead of importing from msvcrt.dll
+   (which lacks __acrt_iob_func on Win98). */
+__asm__("\n"
+    ".globl __imp____acrt_iob_func\n"
+    ".align 4\n"
+    "__imp____acrt_iob_func:\n"
+    "    .long ___acrt_iob_func\n"
     ".text\n"
 );
 K32EOF
@@ -1337,23 +1326,9 @@ build_modern() {
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
 
-    # d3d9/d3d8/ddraw don't normally link user32, but our kernel32_compat.c
-    # user32 W→A wrappers call EnumDisplaySettingsA etc. from user32.
-    # Add user32 to IMPORTS in Makefile.in so configure includes it in the link.
-    for dll in d3d9 d3d8 ddraw; do
-        mf="dlls/$dll/Makefile.in"
-        [ -f "$mf" ] || continue
-        grep -q '^IMPORTS.*user32' "$mf" && continue
-        if grep -q '^IMPORTS' "$mf"; then
-            sed -i '/^IMPORTS/s/$/ user32/' "$mf"
-        else
-            echo 'IMPORTS = user32' >> "$mf"
-        fi
-        echo "    Added user32 to $dll Makefile.in IMPORTS"
-    done
-
-    # Redirect GetModuleHandleExW calls to our compat wrapper (same as legacy)
-    for dll in ddraw wined3d d3d9 d3d8; do
+    # Redirect GetModuleHandleExW calls to our compat wrapper (wined3d only).
+    # d3d8/d3d9/ddraw don't use GetModuleHandleExW — they import GetModuleHandleA.
+    for dll in wined3d; do
         for f in dlls/$dll/*.c; do
             [ -f "$f" ] || continue
             case "$f" in */kernel32_compat.c) continue ;; esac
@@ -1364,8 +1339,9 @@ build_modern() {
     done
 
     # Redirect Win2000+ user32 W-version display functions to compat wrappers.
-    # These functions don't exist on Win98 — only A-versions are available.
-    for dll in ddraw wined3d d3d9 d3d8; do
+    # wined3d only — d3d8/d3d9 have no user32 imports, ddraw imports
+    # MonitorFromWindow/GetMonitorInfoW from user32 directly (available on Win98 SE).
+    for dll in wined3d; do
         for f in dlls/$dll/*.c; do
             [ -f "$f" ] || continue
             case "$f" in */kernel32_compat.c) continue ;; esac
@@ -1374,8 +1350,7 @@ build_modern() {
                         GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
                         ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do
                 grep -q "$func" "$f" 2>/dev/null || continue
-                local compat=wine_k32compat_$(echo "$func" | sed 's/\([A-Z]\)/_\l\1/g;s/^_//;s/__/_/' | tr '[:upper:]' '[:lower:]')
-                # Map function names to compat names
+                local compat
                 case "$func" in
                     EnumDisplayDevicesW) compat=wine_k32compat_EDD_W ;;
                     EnumDisplaySettingsW) compat=wine_k32compat_EDS_W ;;
@@ -1405,9 +1380,9 @@ build_modern() {
         --without-pcap --without-pulse --without-sane \
         --without-sdl --without-udev --without-usb \
         --without-v4l2 --without-vulkan --without-oss \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
         LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8" \
-        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
+        CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
         CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,_isctype,__imp___isctype,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8"
 
     # winebuild.exe is a PE binary; in --without-dlltool mode it spawns
@@ -1531,12 +1506,9 @@ build_legacy() {
     # Inject GetModuleHandleExW Win98 compat into all DLLs
     create_kernel32_compat
 
-    # Redirect GetModuleHandleExW calls to our compat wrapper.
-    # Wine 6-7 ddraw/main.c and wined3d/cs.c call GetModuleHandleExW directly.
-    # __declspec(dllimport) from <winbase.h> forces the linker to create an
-    # import table entry from kernel32.dll even though we provide a local stub.
-    # Renaming at source level eliminates the import entirely.
-    for dll in ddraw wined3d d3d9 d3d8; do
+    # Redirect GetModuleHandleExW calls to our compat wrapper (wined3d only).
+    # d3d8/d3d9/ddraw don't call GetModuleHandleExW — they use GetModuleHandleA.
+    for dll in wined3d; do
         for f in dlls/$dll/*.c; do
             [ -f "$f" ] || continue
             case "$f" in */kernel32_compat.c) continue ;; esac
@@ -1547,7 +1519,9 @@ build_legacy() {
     done
 
     # Redirect Win2000+ user32 W-version display functions to compat wrappers.
-    for dll in ddraw wined3d d3d9 d3d8; do
+    # wined3d only — d3d8/d3d9 have no user32 imports, ddraw imports
+    # MonitorFromWindow/GetMonitorInfoW from user32 directly (available on Win98 SE).
+    for dll in wined3d; do
         for f in dlls/$dll/*.c; do
             [ -f "$f" ] || continue
             case "$f" in */kernel32_compat.c) continue ;; esac
@@ -1585,7 +1559,7 @@ build_legacy() {
         --without-pcap --without-pulse --without-sane --without-oss \
         --without-vulkan \
         --disable-shared --enable-static \
-        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
+        CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -fno-builtin -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -D__MSVCRT__ -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
         LDFLAGS="-static-libgcc -mcrtdll=msvcrt"
 
     # Strip Vista+ API from kernel32/ntdll specs — MUST be after configure,

@@ -6,3 +6,4 @@ wine-legacy/
 tests/run_test_hooks
 tests/run_test_ddraw_stubs
 tests/run_test_passthrough
+output/

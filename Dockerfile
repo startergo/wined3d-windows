@@ -317,7 +317,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c; \
         fi && \
         \
-        # ── kernel32_compat.c (per-DLL Win98 stubs) ────────────────────────
+        # ── kernel32_compat.c (wined3d only — d3d8/d3d9/ddraw import from user32 directly) ──
         for dll in wined3d; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
@@ -325,8 +325,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "dlls/$dll/Makefile.in"; \
         done && \
         \
-        # ── GetModuleHandleExW redirect ────────────────────────────────────
-        for dll in ddraw wined3d d3d9 d3d8; do \
+        # ── GetModuleHandleExW redirect (wined3d only) ────────────────────
+        for dll in wined3d; do \
             for f in dlls/$dll/*.c; do \
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
@@ -334,7 +334,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 sed -i '1i #define GetModuleHandleExW wine_k32compat_GMHEW' "$f"; \
             done; \
         done && \
-        for dll in ddraw wined3d d3d9 d3d8; do \
+        # ── User32 W-version redirects (wined3d only) ─────────────────────
+        for dll in wined3d; do \
             for f in dlls/$dll/*.c; do \
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
@@ -368,7 +369,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             --without-pcap --without-pulse --without-sane \
             --without-sdl --without-udev --without-usb \
             --without-v4l2 --without-vulkan --without-oss \
-            CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W " \
+            CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
             CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20" && \
  \
         \
@@ -568,7 +569,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             --without-freetype \
             --host=i686-w64-mingw32 \
             --with-wine-tools=../wine-${WINE_VERSION} \
-            CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W " \
+            CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf" \
             LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20" && \
         \
         # config.h patches
@@ -647,7 +648,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' dlls/ddraw/surface.c; \
         fi && \
         \
-        # kernel32_compat.c (per-DLL Win98 stubs)
+        # kernel32_compat.c (wined3d only — d3d8/d3d9/ddraw import from user32 directly)
         for dll in wined3d; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
@@ -655,8 +656,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 sed -i 's/^C_SRCS\s*=/C_SRCS = kernel32_compat.c /' "dlls/$dll/Makefile.in"; \
         done && \
         \
-        # GetModuleHandleExW redirect
-        for dll in ddraw wined3d d3d9 d3d8; do \
+        # GetModuleHandleExW redirect (wined3d only)
+        for dll in wined3d; do \
             for f in dlls/$dll/*.c; do \
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
@@ -664,7 +665,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                 sed -i '1i #define GetModuleHandleExW wine_k32compat_GMHEW' "$f"; \
             done; \
         done && \
-        for dll in ddraw wined3d d3d9 d3d8; do \
+        # User32 W-version redirects (wined3d only)
+        for dll in wined3d; do \
             for f in dlls/$dll/*.c; do \
                 [ -f "$f" ] || continue; \
                 case "$f" in */kernel32_compat.c) continue ;; esac; \
