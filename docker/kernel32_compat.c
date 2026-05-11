@@ -502,13 +502,10 @@ __asm__("\n"
 
 /* __imp__ aliases for original Win2000+ function names (before -D rename).
    __declspec(dllimport) in system headers bypasses preprocessor -D flags,
-   generating __imp__ references to the original names. */
+   generating __imp__ references to the original names.
+   Note: __imp__IsBadStringPtrW@8 is provided by ucrtcompat.o (in libmsvcrt.a)
+   to avoid needing kernel32_compat.c in all DLLs. */
 __asm__("\n"
-    ".globl __imp__IsBadStringPtrW@8\n"
-    ".section .rdata,\"dr\"\n"
-    ".align 4\n"
-    "__imp__IsBadStringPtrW@8:\n"
-    "    .long _wine_k32compat_IBSP_W@8\n"
     ".globl __imp__FreeLibraryAndExitThread@8\n"
     ".align 4\n"
     "__imp__FreeLibraryAndExitThread@8:\n"
