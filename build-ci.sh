@@ -607,7 +607,7 @@ strip_kernel32_vista_imports_wine() {
 # Inject local stubs into each DLL so each resolves its own _imp__
 # references without importing from system DLLs that lack them on Win98.
 create_kernel32_compat() {
-    for dll in wined3d d3d9 d3d8 ddraw; do
+    for dll in wined3d; do
         local mf="dlls/$dll/Makefile.in"
         [ -f "$mf" ] || continue
         cat > "dlls/$dll/kernel32_compat.c" << 'K32EOF'

@@ -54,6 +54,8 @@ COPY qemu3dfx_ddraw_hooks.c /docker/qemu3dfx_ddraw_hooks.c
 COPY qemu3dfx_ddraw_passthrough.c /docker/qemu3dfx_ddraw_passthrough.c
 COPY docker/d3dkmt_stubs.c /docker/d3dkmt_stubs.c
 COPY docker/kernel32_compat.c /docker/kernel32_compat.c
+COPY docker/winegcc-filter.sh /docker/winegcc-filter.sh
+COPY docker/msvcrt_stdio_stubs.c /docker/msvcrt_stdio_stubs.c
 
 # ── Shared shell snippets (sourced inline in both build paths) ──────
 # These are defined as Docker ARG/ENV would be too complex for inline
@@ -150,7 +152,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         SleepConditionVariableCS@12 SleepConditionVariableSRW@16 \
         GetTickCount64@0 \
         SetThreadDescription@8 \
-        IsBadStringPtrW@8 FreeLibraryAndExitThread@8; do \
+        ; do \
         _vstrip="$_vstrip --strip-symbol _${api} --strip-symbol __imp__${api}"; \
     done && \
     for lib in /usr/i686-w64-mingw32/lib/libkernel32.a \
@@ -316,7 +318,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         fi && \
         \
         # ── kernel32_compat.c (per-DLL Win98 stubs) ────────────────────────
-        for dll in wined3d d3d9 d3d8 ddraw; do \
+        for dll in wined3d; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
@@ -366,8 +368,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             --without-pcap --without-pulse --without-sane \
             --without-sdl --without-udev --without-usb \
             --without-v4l2 --without-vulkan --without-oss \
-            CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
-            CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8" && \
+            CROSSCFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W " \
+            CROSSLDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20" && \
  \
         \
         # ── Spec stripping (after configure regenerates specs) ──────────────
@@ -385,7 +387,6 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                    -e '/WakeConditionVariable/d' -e '/WakeAllConditionVariable/d' \
                    -e '/SleepConditionVariableCS/d' -e '/SleepConditionVariableSRW/d' \
                    -e '/GetTickCount64/d' -e '/SetThreadDescription/d' \
-                   -e '/IsBadStringPtrW/d' -e '/FreeLibraryAndExitThread/d' \
                    "$spec"; \
         done && \
         for spec in dlls/ntdll/ntdll.spec; do \
@@ -495,6 +496,17 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             sed -i 's|"ucrtbase"|"msvcrt"|g' tools/winegcc/winegcc.c; \
             make -B -C tools/winegcc; \
         fi && \
+        \
+        # ── winegcc-filter wrapper (replicates CI lines 1626-1661) ───────────
+        # Intercepts winegcc calls at runtime to:
+        # - Replace -lucrtbase → -lmsvcrt
+        # - Replace -lwine → lib/libwine.a (static stub)
+        # - Inject --exclude-symbols and -mcrtdll=msvcrt
+        cp /docker/winegcc-filter.sh tools/winegcc/winegcc-filter && \
+        chmod +x tools/winegcc/winegcc-filter && \
+        mv tools/winegcc/winegcc tools/winegcc/winegcc.bin && \
+        ln -sf winegcc-filter tools/winegcc/winegcc && \
+        \
         make -C libs/wpp libwpp.a 2>/dev/null || : && \
         make tools/make_xftmpl 2>/dev/null || : && \
         # Generate IDL-derived headers (wtypes.h etc.) so makedep can find
@@ -518,7 +530,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         \
         # Patch makedep.c: default CRT ucrtbase → msvcrt (Wine 6.x+)
         if [ -f tools/makedep.c ]; then \
-            sed -i 's/return !make->testdll && (!make->staticlib || make->extlib) ? "ucrtbase" : "msvcrt";/return "msvcrt";/' \
+            sed -i -e 's/return !make->testdll && (!make->staticlib || make->extlib) ? "ucrtbase" : "msvcrt";/return "msvcrt";/' \
+                   -e 's/crt_dll = !make->testdll && !make->staticlib ? "ucrtbase" : "msvcrt";/crt_dll = "msvcrt";/' \
                 tools/makedep.c; \
         fi && \
         # port.c / ldt.c stubs
@@ -555,8 +568,8 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             --without-freetype \
             --host=i686-w64-mingw32 \
             --with-wine-tools=../wine-${WINE_VERSION} \
-            CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W -DIsBadStringPtrW=wine_k32compat_IBSP_W -DFreeLibraryAndExitThread=wine_k32compat_FLAET" \
-            LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20,_wine_k32compat_IBSP_W@8,__imp__wine_k32compat_IBSP_W@8,_wine_k32compat_FLAET@8,__imp__wine_k32compat_FLAET@8" && \
+            CFLAGS="-O3 -march=i686 -msse4.2 -mtune=generic -fcommon -DWINE_NOWINSOCK -DUSE_WIN32_OPENGL -DUSE_WIN32_VULKAN -DNDEBUG -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT -DGetModuleHandleExW=wine_k32compat_GMHEW -Dcopysignf=_copysignf -DEnumDisplayDevicesW=wine_k32compat_EDD_W -DEnumDisplaySettingsW=wine_k32compat_EDS_W -DEnumDisplaySettingsExW=wine_k32compat_EDSE_W -DGetMonitorInfoW=wine_k32compat_GMI_W -DEnumDisplayMonitors=wine_k32compat_EDM -DMonitorFromWindow=wine_k32compat_MFW -DMonitorFromPoint=wine_k32compat_MFP -DChangeDisplaySettingsExW=wine_k32compat_CDSE_W " \
+            LDFLAGS="-static-libgcc -mcrtdll=msvcrt -Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,_copysignf,__imp___copysignf,floor,__imp__floor,floorf,__imp__floorf,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,_fstat32,__imp___fstat32,_initterm,__imp___initterm,_initterm_e,__imp___initterm_e,__acrt_iob_func,__imp____acrt_iob_func,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12,_wine_k32compat_CDSE_W@20,__imp__wine_k32compat_CDSE_W@20" && \
         \
         # config.h patches
         sed -i \
@@ -635,7 +648,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         fi && \
         \
         # kernel32_compat.c (per-DLL Win98 stubs)
-        for dll in wined3d d3d9 d3d8 ddraw; do \
+        for dll in wined3d; do \
             [ -f "dlls/$dll/Makefile.in" ] || continue; \
             cp /docker/kernel32_compat.c "dlls/$dll/kernel32_compat.c"; \
             grep -q 'kernel32_compat.c' "dlls/$dll/Makefile.in" || \
@@ -692,22 +705,32 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
         make dlls/wined3d/Makefile dlls/d3d9/Makefile \
             dlls/d3d8/Makefile dlls/ddraw/Makefile \
             dlls/winecrt0/Makefile dlls/dxguid/Makefile \
-            dlls/uuid/Makefile 2>/dev/null || \
-        for dll in wined3d d3d9 d3d8 ddraw winecrt0 dxguid uuid; do \
+            dlls/uuid/Makefile dlls/msvcrt/Makefile 2>/dev/null || \
+        for dll in wined3d d3d9 d3d8 ddraw winecrt0 dxguid uuid msvcrt; do \
             ../wine-${WINE_VERSION}/tools/makedep/makedep dlls/$dll 2>/dev/null || true; \
         done && \
         # Strip wine/libwine from IMPORTS in generated Makefiles (CI lines 1090-1096)
         # and replace -lwine with stub archive path (CI line 1098).
+        # Also strip ucrtbase from IMPORTS (makedep patch may not apply to all versions).
         for mf in dlls/wined3d/Makefile dlls/d3d9/Makefile \
                   dlls/d3d8/Makefile dlls/ddraw/Makefile; do \
             [ -f "$mf" ] || continue; \
             sed -i \
                 -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]libwine\([[:space:]]\|$\)//g' \
                 -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]wine\([[:space:]]\|$\)//g' \
+                -e '/^IMPORTS[[:space:]]*=/s/[[:space:]]ucrtbase\([[:space:]]\|$\)//g' \
                 "$mf"; \
             sed -i 's/-lwine\([[:space:]]\|$\)/..\/..\/lib\/libwine.a\1/g' "$mf"; \
+            sed -i '/-lucrtbase/d' "$mf"; \
         done && \
         \
+        # ── Use winegcc-filter wrapper in ALL DLL Makefiles (CI line 1764-1767) ──
+        # Redirect WINEGCC from winegcc to winegcc-filter so every DLL build
+        # goes through our wrapper (handles -lucrtbase→-lmsvcrt, -lwine→stub, etc.)
+        find dlls -name Makefile | xargs sed -i \
+            -e 's|\(^WINEGCC = .*/\)winegcc[[:space:]]|\1winegcc-filter |' \
+            -e 's|\(^WINEGCC = .*/\)winegcc$|\1winegcc-filter|' && \
+\
         # ── Spec stripping (after configure regenerates specs) ──────────────
         for spec in dlls/kernel32/kernel32.spec dlls/ntdll/ntdll.spec; do \
             [ -f "$spec" ] || continue; \
@@ -723,7 +746,6 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                    -e '/WakeConditionVariable/d' -e '/WakeAllConditionVariable/d' \
                    -e '/SleepConditionVariableCS/d' -e '/SleepConditionVariableSRW/d' \
                    -e '/GetTickCount64/d' -e '/SetThreadDescription/d' \
-                   -e '/IsBadStringPtrW/d' -e '/FreeLibraryAndExitThread/d' \
                    "$spec"; \
         done && \
         for spec in dlls/ntdll/ntdll.spec; do \
@@ -881,6 +903,12 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
             cp "$sys" "dlls/$dll/lib$dll.a"; \
             cp "$sys" "dlls/lib$dll.a"; \
         done && \
+        # Replace ucrtbase import lib with a copy of libmsvcrt.a — winegcc
+        # may still add -lucrtbase to the link; this resolves CRT symbols
+        # through msvcrt.dll imports (same archive, same thunks).
+        mkdir -p dlls/ucrtbase && \
+        cp /usr/i686-w64-mingw32/lib/libmsvcrt.a dlls/ucrtbase/libucrtbase.a && \
+        cp dlls/ucrtbase/libucrtbase.a dlls/libucrtbase.a && \
         make -j$(nproc) -C dlls/winecrt0 2>/dev/null || true && \
         # Build dxguid and uuid (needed by ddraw/d3d9/d3d8 for GUID imports).
         # Generate Makefiles first, then build. Fall back to system lib on failure.
@@ -918,6 +946,10 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
                     -e 's/return wcstok(str, delim, NULL)/return wcstok(str, delim)/' \
                     include/msvcrt/corecrt_wstring.h; \
             fi && \
+            # Append __stdio_common_* stubs to msvcrt/wcs.c (CI patch_msvcrt_6x)
+            # crt-git headers make Wine 6.x msvcrt code call UCRT printf functions;
+            # these stubs redirect them to the legacy _vsnprintf/_vsnwprintf API.
+            cat /docker/msvcrt_stdio_stubs.c >> dlls/msvcrt/wcs.c && \
             make -j$(nproc) -C dlls/msvcrt msvcrt.dll; \
         fi && \
         cp dlls/wined3d/wined3d.dll \
