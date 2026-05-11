@@ -1148,9 +1148,11 @@ K32EOF
             cat >> "dlls/$dll/kernel32_compat.c" << 'UCRTEOF'
 
 /* --- UCRT compat for modern PE build (not in stripped import libs) --- */
-typedef void FILE;
-FILE * __cdecl __iob_func(void);
-void * __cdecl __acrt_iob_func(void) { return __iob_func(); }
+/* __acrt_iob_func: return stdin/stdout/stderr FILE array.
+   Wine 8.x modern PE build links against Wine's libucrtbase.a (not MSYS2's
+   libmsvcrt.a), so __iob_func is unavailable. Use a static buffer instead. */
+static char _fake_iob[3][64];
+void * __cdecl __acrt_iob_func(void) { return _fake_iob; }
 
 int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {
     if (s && n > 0) s[0] = 0;
