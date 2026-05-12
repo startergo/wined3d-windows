@@ -93,6 +93,7 @@ jobs:
             wget
             git
             diffutils
+            python
 
       - name: Cache Wine source and CRT
         uses: actions/cache@v4

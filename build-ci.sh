@@ -2192,7 +2192,15 @@ MSEOF
 
 # ── Patch PE headers for Windows 98 ────────────────────────────────
 patch_pe_win98() {
-    python3 "$SCRIPT_DIR/docker/patch_pe_win98.py" "$1" || echo "    WARNING: python3 PE patching failed"
+    local py
+    for cmd in python3 python; do
+        if command -v "$cmd" &>/dev/null; then py="$cmd"; break; fi
+    done
+    if [ -z "$py" ]; then
+        echo "    WARNING: no python found — skipping PE patching"
+        return 0
+    fi
+    "$py" "$SCRIPT_DIR/docker/patch_pe_win98.py" "$1"
 }
 
 # ── Collect output DLLs ─────────────────────────────────────────────
