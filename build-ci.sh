@@ -1184,6 +1184,23 @@ __asm__("\n"
     ".text\n"
 );
 
+/* Provide _vsnprintf + __imp___vsnprintf for libwinecrt0.a (debug.c).
+   crt-git 12.0's libmsvcrt.a doesn't have _vsnprintf, and Wine's
+   ucrtbase import lib doesn't either. The no-op body is fine since
+   debug.c only uses it for trace formatting. */
+int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {
+    if (s && n > 0) s[0] = 0;
+    return 0;
+}
+__asm__("\n"
+    ".globl __imp___vsnprintf\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp___vsnprintf:\n"
+    "    .long _vsnprintf\n"
+    ".text\n"
+);
+
 K32EOF
         # Modern PE build: add UCRT compat directly to kernel32_compat.c.
         # The import libs are generated from stripped specs, so __acrt_iob_func,
@@ -1199,10 +1216,8 @@ K32EOF
 static char _fake_iob[3][64];
 void * __cdecl __acrt_iob_func(void) { return _fake_iob; }
 
-int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {
-    if (s && n > 0) s[0] = 0;
-    return 0;
-}
+/* _vsnprintf + __imp___vsnprintf are now in the common K32EOF section. */
+
 int __cdecl __stdio_common_vsprintf(unsigned long long o, char *b, unsigned int n, const char *f, void *l, void *a) {
     (void)o; (void)l;
     return _vsnprintf(b, n == (unsigned int)-1 ? 0x7fffffff : n, f, a);
@@ -1220,10 +1235,6 @@ __asm__("\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
     "    .long ___acrt_iob_func\n"
-    ".globl __imp___vsnprintf\n"
-    ".align 4\n"
-    "__imp___vsnprintf:\n"
-    "    .long __vsnprintf\n"
     ".globl __imp____stdio_common_vsprintf\n"
     ".align 4\n"
     "__imp____stdio_common_vsprintf:\n"
