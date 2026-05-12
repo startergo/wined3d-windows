@@ -1741,7 +1741,7 @@ if [ \$compile_only -eq 0 ]; then
     # Inject CRT compat stubs directly — winegcc links Wine's own
     # ucrtbase import lib (dlls/ucrtbase/libucrtbase.a) which doesn't
     # have _vsnprintf or the UCRT compat stubs we added to system libs.
-    [ -f /tmp/ucrtcompat.o ] && args+=(/tmp/ucrtcompat.o)
+    [ -f ${TMPDIR:-/tmp}/ucrtcompat.o ] && args+=(${TMPDIR:-/tmp}/ucrtcompat.o)
     # Exclude wine_k32compat_GMHEW (GetModuleHandleExW redirect) stub from
     # DLL exports so it doesn't leak into import libs.
     args+=(-Xlinker --exclude-symbols -Xlinker _wine_k32compat_GMHEW@12,__imp__wine_k32compat_GMHEW@12,_GlobalMemoryStatusEx@4,__imp__GlobalMemoryStatusEx@4,_RtlIsCriticalSectionLockedByThread@4,__imp__RtlIsCriticalSectionLockedByThread@4,_InitOnceExecuteOnce@16,__imp__InitOnceExecuteOnce@16,_InitializeConditionVariable@4,__imp__InitializeConditionVariable@4,_WakeConditionVariable@4,__imp__WakeConditionVariable@4,_WakeAllConditionVariable@4,__imp__WakeAllConditionVariable@4,_SleepConditionVariableCS@12,__imp__SleepConditionVariableCS@12,_SetThreadDescription@8,__imp__SetThreadDescription@8,floor,__imp__floor,floorf,__imp__floorf,_vsnprintf,__imp___vsnprintf,atoi,atol,abs,isprint,isdigit,isalpha,isalnum,isspace,isupper,islower,isxdigit,iscntrl,isgraph,ispunct,__acrt_iob_func,__imp____acrt_iob_func,_fdclass,__imp___fdclass,_dclass,__imp___dclass,_dsign,__imp___dsign,_fdsign,__imp___fdsign,__stdio_common_vsprintf,__imp____stdio_common_vsprintf,__stdio_common_vfprintf,__imp____stdio_common_vfprintf,__stdio_common_vsscanf,__imp____stdio_common_vsscanf,memcmp,__imp__memcmp,memchr,__imp__memchr,memcpy,__imp__memcpy,memset,__imp__memset,memmove,__imp__memmove,strlen,__imp__strlen,strcpy,__imp__strcpy,strcat,__imp__strcat,strcmp,__imp__strcmp,strncmp,__imp__strncmp,strchr,__imp__strchr,strrchr,__imp__strrchr,strstr,__imp__strstr,strcspn,__imp__strcspn,strnlen,__imp__strnlen,exp,__imp__exp,log,__imp__log,pow,__imp__pow,sprintf,__imp__sprintf,fprintf,__imp__fprintf,strtoul,__imp__strtoul,getc,__imp__getc,ungetc,__imp__ungetc,__lc_codepage,__imp____lc_codepage,_fstat32,__imp___fstat32,_wine_k32compat_EDD_W@16,__imp__wine_k32compat_EDD_W@16,_wine_k32compat_EDS_W@12,__imp__wine_k32compat_EDS_W@12,_wine_k32compat_EDSE_W@16,__imp__wine_k32compat_EDSE_W@16,_wine_k32compat_GMI_W@8,__imp__wine_k32compat_GMI_W@8,_wine_k32compat_EDM@16,__imp__wine_k32compat_EDM@16,_wine_k32compat_MFW@8,__imp__wine_k32compat_MFW@8,_wine_k32compat_MFP@12,__imp__wine_k32compat_MFP@12)
@@ -1864,8 +1864,8 @@ WGEOF
 
     # Use winegcc-filter wrapper instead of winegcc in DLL Makefiles
     find dlls -name Makefile | xargs sed -i \
-        -e 's|\(^WINEGCC = .*/\)winegcc[[:space:]]|\1winegcc-filter |' \
-        -e 's|\(^WINEGCC = .*/\)winegcc$|\1winegcc-filter|'
+        -e 's|\(^WINEGCC = .*/\)winegcc\(\.exe\)\{0,1\}[[:space:]]|\1winegcc-filter |' \
+        -e 's|\(^WINEGCC = .*/\)winegcc\(\.exe\)\{0,1\}$|\1winegcc-filter|'
 
     if [ -d libs/wpp ] && [ -f libs/wpp/libwpp.a ]; then
         printf 'all:\nlibwpp.a:\ninstall clean distclean:\n' > libs/wpp/Makefile
