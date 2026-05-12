@@ -1170,15 +1170,17 @@ __asm__("\n"
 );
 #endif /* K32COMPAT_DISPLAY_WRAPPERS */
 
-/* __imp__IsBadStringPtrW@8 must be outside K32COMPAT_DISPLAY_WRAPPERS guard
-   because d3d9/d3d8 also reference IsBadStringPtrW via __declspec(dllimport)
-   headers but don't enable display wrappers. */
+/* __imp__IsBadStringPtrW@8 redirect for d3d9/d3d8/ddraw — these DLLs don't
+   get K32COMPAT_DISPLAY_WRAPPERS so wine_k32compat_IBSP_W is unavailable.
+   Redirect directly to IsBadStringPtrA@8 (Win98-safe). Parameter types differ
+   (LPCWSTR vs LPCSTR) but at ABI level both are pointers; IsBadStringPtrA
+   still catches invalid pointers. */
 __asm__("\n"
     ".globl __imp__IsBadStringPtrW@8\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp__IsBadStringPtrW@8:\n"
-    "    .long _wine_k32compat_IBSP_W@8\n"
+    "    .long _IsBadStringPtrA@8\n"
     ".text\n"
 );
 
