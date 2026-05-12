@@ -17,6 +17,9 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
         f.seek(opt + 74); f.write(struct.pack('<H', 10))      # MinorSubsystemVersion
         old_dc = struct.unpack_from('<H', data, opt + 70)[0]
         f.seek(opt + 70); f.write(struct.pack('<H', 0x0000))   # Clear DllCharacteristics
+        old_ib = struct.unpack_from('<I', data, opt + 28)[0]
+        if old_ib != 0x10000000:
+            f.seek(opt + 28); f.write(struct.pack('<I', 0x10000000))  # ImageBase
 
         sec_off = opt + opt_size
         strip = [i for i in range(nsec)
@@ -69,6 +72,8 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
                     f.seek(ra)
                     f.write(sd + b'\x00'*(rs-len(sd)) if len(sd) < rs else sd)
             f.truncate(rp)
-            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000, stripped {len(strip)} debug ({os.path.basename(dll)})')
+            ib_info = f', ImgBase=0x{old_ib:08X}->0x10000000' if old_ib != 0x10000000 else ''
+            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000{ib_info}, stripped {len(strip)} debug ({os.path.basename(dll)})')
         else:
-            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000 ({os.path.basename(dll)})')
+            ib_info = f', ImgBase=0x{old_ib:08X}->0x10000000' if old_ib != 0x10000000 else ''
+            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000{ib_info} ({os.path.basename(dll)})')
