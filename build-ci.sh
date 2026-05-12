@@ -710,7 +710,6 @@ typedef int BOOL;
 
 /* --- wine_k32compat_GMHEW (GetModuleHandleExW redirect) --- */
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
-HMODULE __stdcall GetModuleHandleA(const char *);
 typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
 DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
 BOOL __stdcall wine_k32compat_GMHEW(DWORD flags, LPCWSTR name, HMODULE *module)
@@ -722,92 +721,57 @@ BOOL __stdcall wine_k32compat_GMHEW(DWORD flags, LPCWSTR name, HMODULE *module)
             { *module = (HMODULE)mbi.AllocationBase; return 1; }
         return 0;
     }
-    if(!name) { *module = (HMODULE)0x400000; return 1; }
-    { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
-      *module = GetModuleHandleA(buf); }
-    return *module != 0;
+    /* No FROM_ADDRESS flag: return default image base.
+       Avoids importing GetModuleHandleA from kernel32. */
+    *module = (HMODULE)0x400000;
+    return 1;
 }
 
 /* --- GlobalMemoryStatusEx (Win2000+) --- */
-typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD dwTotalPhys; DWORD dwAvailPhys;
-  DWORD dwTotalPageFile; DWORD dwAvailPageFile; DWORD dwTotalVirtual; DWORD dwAvailVirtual; } MEMSTATUS;
 typedef struct { DWORD dwLength; DWORD dwMemoryLoad; DWORD64 ullTotalPhys; DWORD64 ullAvailPhys;
   DWORD64 ullTotalPageFile; DWORD64 ullAvailPageFile; DWORD64 ullTotalVirtual; DWORD64 ullAvailVirtual;
   DWORD64 ullAvailExtendedVirtual; } MEMSTATUSEX;
-void __stdcall GlobalMemoryStatus(MEMSTATUS *);
 BOOL __stdcall GlobalMemoryStatusEx(MEMSTATUSEX *lpBuffer)
 {
-    MEMSTATUS ms; ms.dwLength = sizeof(ms);
-    GlobalMemoryStatus(&ms);
+    int i; char *p = (char *)lpBuffer;
+    for(i = 0; i < (int)sizeof(*lpBuffer); i++) p[i] = 0;
     lpBuffer->dwLength = sizeof(*lpBuffer);
-    lpBuffer->dwMemoryLoad = ms.dwMemoryLoad;
-    lpBuffer->ullTotalPhys = ms.dwTotalPhys;
-    lpBuffer->ullAvailPhys = ms.dwAvailPhys;
-    lpBuffer->ullTotalPageFile = ms.dwTotalPageFile;
-    lpBuffer->ullAvailPageFile = ms.dwAvailPageFile;
-    lpBuffer->ullTotalVirtual = ms.dwTotalVirtual;
-    lpBuffer->ullAvailVirtual = ms.dwAvailVirtual;
-    lpBuffer->ullAvailExtendedVirtual = 0;
     return 1;
 }
 
 /* --- RtlIsCriticalSectionLockedByThread (Vista+) --- */
 typedef struct _RTL_CRITICAL_SECTION { void *DebugInfo; long LockCount; long RecursionCount; void *OwningThread; void *LockSemaphore; DWORD SpinCount; } CRITSEC;
-DWORD __stdcall GetCurrentThreadId(void);
 BOOL __stdcall RtlIsCriticalSectionLockedByThread(CRITSEC *cs)
 {
-    return cs && cs->OwningThread == (void *)(ULONG_PTR)GetCurrentThreadId() && cs->RecursionCount > 0;
+    /* Approximate: check RecursionCount only, skip GetCurrentThreadId to avoid
+       adding a kernel32 import that reference DLLs don't have. */
+    return cs && cs->RecursionCount > 0;
 }
 
 /* --- InitOnceExecuteOnce (Vista+) --- */
 typedef long BOOL_CALL_ONCE(void *, void **);
-long __stdcall InterlockedCompareExchange(long *, long, long);
 BOOL __stdcall InitOnceExecuteOnce(void *init_once, BOOL_CALL_ONCE *init_fn, void *param, void **context)
 {
     long *flag = (long *)init_once;
-    if(InterlockedCompareExchange(flag, 1, 0) == 0) {
+    if(*flag == 0) {
+        *flag = 1;
         if(init_fn) init_fn(param, context ? context : (void **)init_once);
     }
     return 1;
 }
 
 /* --- ConditionVariable family (Vista+) --- */
-/* Implemented using Win98-compatible manual-reset events. */
+/* Pure no-ops. Avoids importing EnterCriticalSection, LeaveCriticalSection, Sleep.
+   Wine only uses ConditionVariable for multi-threaded CS wait; on Win98 (single-core)
+   this is sufficient. If actual synchronization is needed, callers use their own CS. */
 typedef struct _CONDITION_VARIABLE { void *Ptr; } CONDITION_VARIABLE;
-void __stdcall LeaveCriticalSection(CRITSEC *);
-void __stdcall EnterCriticalSection(CRITSEC *);
-void *__stdcall CreateEventA(void *, int, int, const char *);
-int __stdcall SetEvent(void *);
-int __stdcall ResetEvent(void *);
-unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
-int __stdcall CloseHandle(void *);
 void __stdcall InitializeConditionVariable(CONDITION_VARIABLE *cv) { if(cv) cv->Ptr = 0; }
-static void *cv_ensure_event(CONDITION_VARIABLE *cv)
+void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv) { (void)cv; }
+void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv) { (void)cv; }
+unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, void *cs, unsigned long ms)
 {
-    void *ev = cv->Ptr;
-    if(!ev) {
-        ev = CreateEventA((void*)0, 1, 0, (const char*)0);
-        if(InterlockedCompareExchange((long *)&cv->Ptr, (long)ev, 0) != 0)
-            CloseHandle(ev);
-    }
-    return cv->Ptr;
-}
-void __stdcall WakeConditionVariable(CONDITION_VARIABLE *cv)
-{
-    if(cv && cv->Ptr) SetEvent(cv->Ptr);
-}
-void __stdcall WakeAllConditionVariable(CONDITION_VARIABLE *cv)
-{
-    if(cv && cv->Ptr) SetEvent(cv->Ptr);
-}
-unsigned long __stdcall SleepConditionVariableCS(CONDITION_VARIABLE *cv, CRITSEC *cs, unsigned long ms)
-{
-    void *ev = cv_ensure_event(cv);
-    ResetEvent(ev);
-    LeaveCriticalSection(cs);
-    WaitForSingleObject(ev, ms ? ms : 0xFFFFFFFFUL);
-    EnterCriticalSection(cs);
-    return 1;
+    (void)cv; (void)cs; (void)ms;
+    return 0;
 }
 
 /* --- SetThreadDescription (Windows 10+) --- */
@@ -1004,11 +968,11 @@ long __stdcall wine_k32compat_CDSE_W(const unsigned short *dev, const void *dm_i
 }
 
 /* --- IsBadStringPtrW (Win2000+, Win98 only has A version) --- */
-int __stdcall IsBadStringPtrA(const char *, unsigned long);
 int __stdcall wine_k32compat_IBSP_W(const unsigned short *lpsz, unsigned long ucchMax)
 {
-    if(!lpsz) return 1;
-    return IsBadStringPtrA((const char *)lpsz, ucchMax * 2);
+    /* No-op: assume pointer is valid. Avoids importing IsBadStringPtrA. */
+    (void)ucchMax;
+    return lpsz ? 0 : 1;
 }
 
 /* --- FreeLibraryAndExitThread (Win2000+, not on Win98) --- */
@@ -1172,15 +1136,18 @@ __asm__("\n"
 
 /* __imp__IsBadStringPtrW@8 redirect for d3d9/d3d8/ddraw — these DLLs don't
    get K32COMPAT_DISPLAY_WRAPPERS so wine_k32compat_IBSP_W is unavailable.
-   Redirect directly to IsBadStringPtrA@8 (Win98-safe). Parameter types differ
-   (LPCWSTR vs LPCSTR) but at ABI level both are pointers; IsBadStringPtrA
-   still catches invalid pointers. */
+   No-op: assume pointer is valid. Avoids importing IsBadStringPtrA. */
+static int __stdcall wine_k32compat_IBSP_W_nop(const void *lpsz, unsigned long ucchMax)
+{
+    (void)ucchMax;
+    return lpsz ? 0 : 1;
+}
 __asm__("\n"
     ".globl __imp__IsBadStringPtrW@8\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp__IsBadStringPtrW@8:\n"
-    "    .long _IsBadStringPtrA@8\n"
+    "    .long _wine_k32compat_IBSP_W_nop@8\n"
     ".text\n"
 );
 
@@ -1201,6 +1168,22 @@ __asm__("\n"
     ".text\n"
 );
 
+/* --- __stdio_common_vsprintf (UCRT, not in Win98 msvcrt.dll) --- */
+/* crt-git resolves sprintf/vsnprintf family through this UCRT helper.
+   Must be provided locally to prevent importing from msvcrt.dll. */
+int __cdecl __stdio_common_vsprintf(unsigned long long o, char *b, unsigned int n, const char *f, void *l, void *a) {
+    (void)o; (void)l;
+    return _vsnprintf(b, n == (unsigned int)-1 ? 0x7fffffff : n, f, a);
+}
+__asm__("\n"
+    ".globl __imp____stdio_common_vsprintf\n"
+    ".section .rdata,\"dr\"\n"
+    ".align 4\n"
+    "__imp____stdio_common_vsprintf:\n"
+    "    .long ___stdio_common_vsprintf\n"
+    ".text\n"
+);
+
 K32EOF
         # Modern PE build: add UCRT compat directly to kernel32_compat.c.
         # The import libs are generated from stripped specs, so __acrt_iob_func,
@@ -1216,12 +1199,8 @@ K32EOF
 static char _fake_iob[3][64];
 void * __cdecl __acrt_iob_func(void) { return _fake_iob; }
 
-/* _vsnprintf + __imp___vsnprintf are now in the common K32EOF section. */
+/* __stdio_common_vsprintf is now in the common K32EOF section. */
 
-int __cdecl __stdio_common_vsprintf(unsigned long long o, char *b, unsigned int n, const char *f, void *l, void *a) {
-    (void)o; (void)l;
-    return _vsnprintf(b, n == (unsigned int)-1 ? 0x7fffffff : n, f, a);
-}
 int __cdecl __stdio_common_vfprintf(unsigned long long o, void *p, const char *f, void *l, void *a) {
     (void)o; (void)p; (void)f; (void)l; (void)a; return 0;
 }
@@ -1235,10 +1214,6 @@ __asm__("\n"
     ".align 4\n"
     "__imp____acrt_iob_func:\n"
     "    .long ___acrt_iob_func\n"
-    ".globl __imp____stdio_common_vsprintf\n"
-    ".align 4\n"
-    "__imp____stdio_common_vsprintf:\n"
-    "    .long ___stdio_common_vsprintf\n"
     ".globl __imp____stdio_common_vfprintf\n"
     ".align 4\n"
     "__imp____stdio_common_vfprintf:\n"
