@@ -208,8 +208,14 @@ __asm__("\n"
     "    .long ___stdio_common_vsscanf\n"
     ".text\n"
 );
-    /* Provide __imp___vsnprintf for libwinecrt0.a (debug.c). */
-    /* crt-git 12.0 may not include this import stub in libmsvcrt.a. */
+    /* Provide _vsnprintf + __imp___vsnprintf for libwinecrt0.a (debug.c).
+       crt-git 12.0 doesn't include _vsnprintf in libmsvcrt.a, so provide both
+       the function body and the __imp__ pointer. Using a no-op implementation
+       since debug.c only uses it for trace formatting (non-critical). */
+    int __cdecl _vsnprintf(char *s, unsigned int n, const char *f, ...) {
+        if (s && n > 0) s[0] = 0;
+        return 0;
+    }
     __asm__("\n"
         ".globl __imp___vsnprintf\n"
         ".section .rdata,\"dr\"\n"
@@ -2019,6 +2025,17 @@ WGEOF
         else
             rm -f "$tmp"
         fi
+    done
+
+    # Inject __imp__IsBadStringPtrW@8 redirect (→ IsBadStringPtrA@8) into
+    # Wine's in-tree kernel32 import lib. IsBadStringPtrW was stripped above
+    # but Wine code still references it. The redirect was already injected into
+    # system libkernel32.a by create_ucrtcompat(), but winegcc links against
+    # Wine's own import libs first.
+    local _ibspw_o="${TMPDIR:-/tmp}/ibspw_compat.o"
+    for lib in dlls/kernel32/libkernel32.a; do
+        [ -f "$lib" ] && [ -f "$_ibspw_o" ] && ar rs "$lib" "$_ibspw_o" 2>/dev/null && \
+            echo "    Injected ibspw_compat into Wine kernel32 import lib"
     done
 
     # Strip Win2000+ user32 W-version display functions from Wine-generated
