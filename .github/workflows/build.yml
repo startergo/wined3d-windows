@@ -94,20 +94,17 @@ jobs:
         shell: msys2 {0}
         run: |
           # Install exact toolchain matching the reference qemu-3dfx build environment.
-          # Using pacman -U with --nodeps to bypass dependency resolution that would pull
-          # incompatible versions (GCC 15+, standard crt instead of crt-git 12.0).
-          # CRT 12.0 + GCC 14.2 produce DLLs compatible with Win98's msvcrt.dll.
+          # Single pacman -U --nodeps call prevents dependency resolver from replacing
+          # our pinned versions with latest repo versions (e.g. gcc-libs 15 → 14.2).
+          # CRT-git 12.0 + GCC 14.2 produce DLLs compatible with Win98's msvcrt.dll.
           BASE=https://repo.msys2.org/mingw/mingw32
-          # Core toolchain: crt-git 12.0.0.r480 (Win98-compatible CRT startup code)
           pacman -U --noconfirm --overwrite '*' --nodeps \
             ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-winpthreads-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-binutils-2.44-4-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-gcc-libs-14.2.0-3-any.pkg.tar.zst \
-            ${BASE}/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst
-          # Runtime deps compatible with GCC 14.2 (not the latest which require cc-libs)
-          pacman -U --noconfirm --overwrite '*' --nodeps \
             ${BASE}/mingw-w64-i686-gettext-runtime-0.26-2-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-libiconv-1.19-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-zlib-1.3.2-2-any.pkg.tar.zst \

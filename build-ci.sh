@@ -208,6 +208,16 @@ __asm__("\n"
     "    .long ___stdio_common_vsscanf\n"
     ".text\n"
 );
+    /* Provide __imp___vsnprintf for libwinecrt0.a (debug.c). */
+    /* crt-git 12.0 may not include this import stub in libmsvcrt.a. */
+    __asm__("\n"
+        ".globl __imp___vsnprintf\n"
+        ".section .rdata,\"dr\"\n"
+        ".align 4\n"
+        "__imp___vsnprintf:\n"
+        "    .long _vsnprintf\n"
+        ".text\n"
+    );
 UCRTEOF
     gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ucrtcompat.o" "$tmpdir/ucrtcompat.c"
     ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ucrtcompat.o"
@@ -231,6 +241,11 @@ __asm__("\n"
 IBSPEOF
     gcc -nostdinc -c -O2 -Wno-attributes -o "$tmpdir/ibspw_compat.o" "$tmpdir/ibspw_compat.c"
     ar rs /mingw32/lib/libmsvcrt.a "$tmpdir/ibspw_compat.o"
+    # Also inject into libkernel32.a so the linker finds __imp__IsBadStringPtrW@8
+    # when searching kernel32 imports (IsBadStringPtrW was stripped from the spec).
+    for k32lib in /mingw32/lib/libkernel32.a /mingw32/i686-w64-mingw32/lib/libkernel32.a; do
+        [ -f "$k32lib" ] && ar rs "$k32lib" "$tmpdir/ibspw_compat.o"
+    done
 
     # Inject CRT compat stubs into libgcc.a for functions not in Win98's msvcrt.dll.
     # _copysignf → wraps _copysign (double, which Win98 has).
