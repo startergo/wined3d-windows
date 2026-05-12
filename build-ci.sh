@@ -2205,11 +2205,13 @@ STUBEOF
 # ── Patch msvcrt for Wine 6.x ──────────────────────────────────────
 patch_msvcrt_6x() {
     # IsBadStringPtrW was stripped from kernel32/ntdll specs (Win2K+ only).
-    # msvcrt.dll uses it but doesn't link kernel32 — redirect to A-version.
-    for f in dlls/msvcrt/*.c; do
-        [ -f "$f" ] || continue
-        grep -q 'IsBadStringPtrW' "$f" 2>/dev/null || continue
-        sed -i '1i #define IsBadStringPtrW IsBadStringPtrA' "$f"
+    # msvcrt.dll uses it via __declspec(dllimport) which bypasses #define
+    # redirects. Inject the __imp__ redirect into ntdll's import lib (which
+    # msvcrt links against) so the linker finds it.
+    local _ibspw_o="${TMPDIR:-/tmp}/ibspw_compat.o"
+    for lib in dlls/ntdll/libntdll.a; do
+        [ -f "$lib" ] && [ -f "$_ibspw_o" ] && ar rs "$lib" "$_ibspw_o" 2>/dev/null && \
+            echo "    Injected ibspw_compat into Wine ntdll import lib (for msvcrt)"
     done
 
     if [ -f include/msvcrt/corecrt_wstring.h ]; then
