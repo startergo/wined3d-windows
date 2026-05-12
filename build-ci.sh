@@ -1137,7 +1137,7 @@ __asm__("\n"
 /* __imp__IsBadStringPtrW@8 redirect for d3d9/d3d8/ddraw — these DLLs don't
    get K32COMPAT_DISPLAY_WRAPPERS so wine_k32compat_IBSP_W is unavailable.
    No-op: assume pointer is valid. Avoids importing IsBadStringPtrA. */
-static int __stdcall wine_k32compat_IBSP_W_nop(const void *lpsz, unsigned long ucchMax)
+int __stdcall wine_k32compat_IBSP_W_nop(const void *lpsz, unsigned long ucchMax)
 {
     (void)ucchMax;
     return lpsz ? 0 : 1;
