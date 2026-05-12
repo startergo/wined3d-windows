@@ -572,6 +572,14 @@ strip_kernel32_vista_imports_wine() {
                __acrt_iob_func; do
         strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
     done
+    # UCRT stdio helpers (not in Win98 msvcrt.dll) — strip from msvcrt so local
+    # kernel32_compat.c definitions take priority over import lib thunks.
+    for api in __stdio_common_vsprintf __stdio_common_vsprintf_s \
+               __stdio_common_vsprintf_p __stdio_common_vsnprintf_s \
+               __stdio_common_vfprintf __stdio_common_vfprintf_s \
+               __stdio_common_vfscanf __stdio_common_vsscanf; do
+        strip_all+=(--strip-symbol "${api}" --strip-symbol "__imp__${api}")
+    done
     # Vista+ APIs + stub CRT: strip from all libs (kernel32, ntdll, ucrtbase, msvcrt)
     for lib in \
         dlls/kernel32/i386-windows/libkernel32.a \
