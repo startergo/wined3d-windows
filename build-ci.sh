@@ -221,7 +221,7 @@ __asm__("\n"
         ".section .rdata,\"dr\"\n"
         ".align 4\n"
         "__imp___vsnprintf:\n"
-        "    .long _vsnprintf\n"
+        "    .long __vsnprintf\n"
         ".text\n"
     );
 UCRTEOF
@@ -1197,7 +1197,7 @@ __asm__("\n"
     ".section .rdata,\"dr\"\n"
     ".align 4\n"
     "__imp___vsnprintf:\n"
-    "    .long _vsnprintf\n"
+    "    .long __vsnprintf\n"
     ".text\n"
 );
 
