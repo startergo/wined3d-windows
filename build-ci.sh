@@ -2204,6 +2204,14 @@ STUBEOF
 
 # ── Patch msvcrt for Wine 6.x ──────────────────────────────────────
 patch_msvcrt_6x() {
+    # IsBadStringPtrW was stripped from kernel32/ntdll specs (Win2K+ only).
+    # msvcrt.dll uses it but doesn't link kernel32 — redirect to A-version.
+    for f in dlls/msvcrt/*.c; do
+        [ -f "$f" ] || continue
+        grep -q 'IsBadStringPtrW' "$f" 2>/dev/null || continue
+        sed -i '1i #define IsBadStringPtrW IsBadStringPtrA' "$f"
+    done
+
     if [ -f include/msvcrt/corecrt_wstring.h ]; then
         sed -i \
             -e 's/wcstok(wchar_t\*,const wchar_t\*,wchar_t\*\*)/wcstok(wchar_t*,const wchar_t*)/' \
