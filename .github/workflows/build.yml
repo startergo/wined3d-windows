@@ -90,23 +90,32 @@ jobs:
             diffutils
             python
 
-      - name: Install pinned MinGW toolchain (GCC 14.2 + crt-git)
+      - name: Install pinned MinGW toolchain (GCC 14.2 + crt-git 12.0)
         shell: msys2 {0}
         run: |
-          # Install reference-matching MinGW packages (exact versions from qemu-3dfx build).
-          # crt-git + headers-git replace standard crt/headers for Win98 CRT compatibility.
-          # GCC 14.2 (not 16.x) matches the reference build that produces working Win98 DLLs.
-          pacman -S --noconfirm --needed \
-            mingw-w64-i686-binutils \
-            mingw-w64-i686-crt-git \
-            mingw-w64-i686-headers-git \
-            mingw-w64-i686-winpthreads-git \
-            mingw-w64-i686-gcc-libs \
-            mingw-w64-i686-gcc
-          # Downgrade GCC to 14.2.0 (latest MSYS2 has 16.x which generates incompatible code)
-          pacman -U --noconfirm --overwrite '*' \
-            https://repo.msys2.org/mingw/mingw32/mingw-w64-i686-gcc-libs-14.2.0-3-any.pkg.tar.zst \
-            https://repo.msys2.org/mingw/mingw32/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst
+          # Install exact toolchain matching the reference qemu-3dfx build environment.
+          # Using pacman -U with --nodeps to bypass dependency resolution that would pull
+          # incompatible versions (GCC 15+, standard crt instead of crt-git 12.0).
+          # CRT 12.0 + GCC 14.2 produce DLLs compatible with Win98's msvcrt.dll.
+          BASE=https://repo.msys2.org/mingw/mingw32
+          # Core toolchain: crt-git 12.0.0.r480 (Win98-compatible CRT startup code)
+          pacman -U --noconfirm --overwrite '*' --nodeps \
+            ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-winpthreads-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-binutils-2.44-4-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gcc-libs-14.2.0-3-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst
+          # Runtime deps compatible with GCC 14.2 (not the latest which require cc-libs)
+          pacman -U --noconfirm --overwrite '*' --nodeps \
+            ${BASE}/mingw-w64-i686-gettext-runtime-0.26-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-libiconv-1.19-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-zlib-1.3.2-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-zstd-1.5.7-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gmp-6.3.0-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-mpfr-4.2.2-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-mpc-1.3.1-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-isl-0.27-1-any.pkg.tar.zst
           echo "=== Toolchain versions ==="
           gcc --version | head -1
           ld --version | head -1
