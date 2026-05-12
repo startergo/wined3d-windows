@@ -55,6 +55,7 @@ COPY qemu3dfx_ddraw_passthrough.c /docker/qemu3dfx_ddraw_passthrough.c
 COPY docker/d3dkmt_stubs.c /docker/d3dkmt_stubs.c
 COPY docker/kernel32_compat.c /docker/kernel32_compat.c
 COPY docker/winegcc-filter.sh /docker/winegcc-filter.sh
+COPY docker/patch_pe_win98.py /docker/patch_pe_win98.py
 COPY docker/msvcrt_stdio_stubs.c /docker/msvcrt_stdio_stubs.c
 
 # ── Shared shell snippets (sourced inline in both build paths) ──────
@@ -1046,59 +1047,7 @@ RUN URL="https://dl.winehq.org/wine/source/${WINE_BRANCH}/wine-${WINE_VERSION}.$
     python3 -c "import os,glob;[open(p,'wb').write(d.replace(b'ucrtbase.dll\x00',b'msvcrt.dll\x00\x00\x00')) or print('Patched:',os.path.basename(p)) for p in glob.glob('/output/${WINE_VERSION}/*.dll') for d in [open(p,'rb').read()] if b'ucrtbase.dll\x00' in d]" && \
     \
     # ── Patch PE headers for Windows 98 compatibility ──────────────────────
-    python3 -c "
-import struct, glob, os
-for dll in glob.glob('/output/${WINE_VERSION}/*.dll'):
-    with open(dll, 'r+b') as f:
-        data = f.read()
-        pe_off = struct.unpack_from('<I', data, 0x3C)[0]
-        coff = pe_off + 4
-        opt = pe_off + 24
-        opt_size = struct.unpack_from('<H', data, coff + 16)[0]
-        nsec = struct.unpack_from('<H', data, coff + 2)[0]
-        f.seek(opt + 68); f.write(struct.pack('<H', 2))
-        f.seek(opt + 72); f.write(struct.pack('<H', 4))
-        f.seek(opt + 74); f.write(struct.pack('<H', 10))
-        old_dc = struct.unpack_from('<H', data, opt + 70)[0]
-        f.seek(opt + 70); f.write(struct.pack('<H', 0x0000))
-        sec_off = opt + opt_size
-        strip = [i for i in range(nsec) if data[sec_off+i*40:sec_off+i*40+8].split(b'\x00')[0].startswith(b'/')]
-        if strip:
-            sa = struct.unpack_from('<I', data, opt + 32)[0]
-            fa = struct.unpack_from('<I', data, opt + 36)[0]
-            kept, kept_data = [], []
-            for i in range(nsec):
-                if i in strip: continue
-                s = sec_off + i * 40
-                nb = data[s:s+8]; vs = struct.unpack_from('<I',data,s+8)[0]
-                va = struct.unpack_from('<I',data,s+12)[0]; rs = struct.unpack_from('<I',data,s+16)[0]
-                ra = struct.unpack_from('<I',data,s+20)[0]; ch = struct.unpack_from('<I',data,s+36)[0]
-                sd = data[ra:ra+rs] if rs > 0 and ra > 0 else b''
-                kept.append([nb,vs,va,rs,ra,ch]); kept_data.append(sd)
-            f.seek(coff+2); f.write(struct.pack('<H', len(kept)))
-            he = ((sec_off + len(kept)*40 + fa - 1) // fa) * fa
-            rp = he; ni = 0
-            for idx in range(len(kept)):
-                sd = kept_data[idx]; nrs = ((len(sd)+fa-1)//fa)*fa if sd else 0
-                nra = rp if nrs > 0 else 0
-                kept[idx][3:5] = [nrs, nra]
-                if nrs: rp = nra + nrs
-                end = ((kept[idx][2]+max(kept[idx][1],nrs)+sa-1)//sa)*sa
-                if end > ni: ni = end
-            f.seek(opt+56); f.write(struct.pack('<I', ni))
-            for i,(nb,vs,va,rs,ra,ch) in enumerate(kept):
-                f.seek(sec_off+i*40); f.write(nb); f.write(struct.pack('<IIIIIIHHI',vs,va,rs,ra,0,0,0,0,ch))
-            ne = sec_off+len(kept)*40; oe = sec_off+nsec*40
-            if ne < oe: f.seek(ne); f.write(b'\x00'*(oe-ne))
-            for idx,(nb,vs,va,rs,ra,ch) in enumerate(kept):
-                sd = kept_data[idx]
-                if sd and rs > 0:
-                    f.seek(ra); f.write(sd + b'\x00'*(rs-len(sd)) if len(sd) < rs else sd)
-            f.truncate(rp)
-            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000, stripped {len(strip)} debug ({os.path.basename(dll)})')
-        else:
-            print(f'  Win98 PE: DllChar=0x{old_dc:04x}->0x0000 ({os.path.basename(dll)})')
-" && \
+    python3 /docker/patch_pe_win98.py /output/${WINE_VERSION} && \
     \
     printf "Built on %s\n  binutils %s\n  crt-git %s\n  gcc-libs %s\n" \
         "$(date '+%T %b %-e %Y')" \

@@ -41,21 +41,7 @@ for path in glob.glob(os.path.join(sys.argv[1], '*.dll')):
 }
 
 patch_pe_win98() {
-    python3 -c "
-import struct, glob, os
-for dll in glob.glob(os.path.join('$1', '*.dll')):
-    with open(dll, 'r+b') as f:
-        f.seek(0x3C)
-        pe_off = struct.unpack('<I', f.read(4))[0]
-        opt = pe_off + 24
-        f.seek(opt + 68)
-        f.write(struct.pack('<H', 2))
-        f.seek(opt + 72)
-        f.write(struct.pack('<H', 4))
-        f.seek(opt + 74)
-        f.write(struct.pack('<H', 10))
-    print(f'  [win98] Subsystem=GUI, SubsystemVersion=4.10: {os.path.basename(dll)}')
-" 2>/dev/null || echo "  WARNING: python3 PE patching failed"
+    python3 "$SCRIPT_DIR/docker/patch_pe_win98.py" "$1" 2>/dev/null || echo "  WARNING: python3 PE patching failed"
 }
 
 for entry in "${VERSIONS[@]}"; do
