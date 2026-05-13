@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch PE headers for Windows 98 compatibility and strip COFF debug sections."""
+"""Strip COFF debug sections from PE DLLs."""
 import struct, glob, os, sys
 
 outdir = sys.argv[1] if len(sys.argv) > 1 else '/output'
@@ -11,16 +11,6 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
         opt = pe_off + 24
         opt_size = struct.unpack_from('<H', data, coff + 16)[0]
         nsec = struct.unpack_from('<H', data, coff + 2)[0]
-
-        old_dc = struct.unpack_from('<H', data, opt + 70)[0]
-        old_subsys = struct.unpack_from('<H', data, opt + 68)[0]
-        old_major = struct.unpack_from('<H', data, opt + 72)[0]
-        old_minor = struct.unpack_from('<H', data, opt + 74)[0]
-
-        f.seek(opt + 68); f.write(struct.pack('<H', 2))       # Subsystem = GUI
-        f.seek(opt + 72); f.write(struct.pack('<H', 4))       # MajorSubsystemVersion
-        f.seek(opt + 74); f.write(struct.pack('<H', 10))      # MinorSubsystemVersion
-        f.seek(opt + 70); f.write(struct.pack('<H', 0x0000))   # Clear DllCharacteristics
 
         sec_off = opt + opt_size
         strip = [i for i in range(nsec)
@@ -73,6 +63,6 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
                     f.seek(ra)
                     f.write(sd + b'\x00'*(rs-len(sd)) if len(sd) < rs else sd)
             f.truncate(rp)
-            print(f'  Win98 PE: Subsys={old_subsys}->2 DllChar=0x{old_dc:04x}->0x0000, stripped {len(strip)} debug ({os.path.basename(dll)})')
+            print(f'  Stripped {len(strip)} debug section(s) ({os.path.basename(dll)})')
         else:
-            print(f'  Win98 PE: Subsys={old_subsys}->2 DllChar=0x{old_dc:04x}->0x0000 ({os.path.basename(dll)})')
+            print(f'  No debug sections ({os.path.basename(dll)})')

@@ -382,8 +382,7 @@ compile_compat() {
     rm -f "$tmp"
 
     # Compile static copysign (avoids importing _copysign from msvcrt.dll)
-    echo "  CC copysign.c"
-    gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_copysign.o" "$SCRIPT_DIR/docker/copysign.c" 2>&1 || true
+    gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_copysign.o" "$SCRIPT_DIR/docker/copysign.c"
 
     # Generate Vulkan stubs from undefined symbols in object files
     echo "  Generating Vulkan stubs"
