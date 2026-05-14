@@ -165,7 +165,21 @@ download_wine() {
 
     if [ ! -f "$archive" ]; then
         echo "  Downloading Wine $version..."
-        curl -L -o "$archive" "$url"
+        if command -v wget &>/dev/null; then
+            wget -q --show-progress -O "$archive" "$url"
+        else
+            curl -L --fail --retry 3 -o "$archive" "$url"
+        fi
+    fi
+
+    # Validate the archive is a real tarball (not an HTML error page)
+    local fsize
+    fsize=$(stat -c%s "$archive" 2>/dev/null || stat -f%z "$archive" 2>/dev/null || echo 0)
+    if [ "$fsize" -lt 1000 ]; then
+        echo "ERROR: Downloaded archive is only $fsize bytes — likely an error page"
+        head -c 500 "$archive" 2>/dev/null
+        rm -f "$archive"
+        return 1
     fi
 
     rm -rf "$wine_dir"
