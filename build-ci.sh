@@ -51,6 +51,73 @@ version_ge() {
     return 0
 }
 
+# ── Toolchain setup (matches Dockerfile) ────────────────────────────
+setup_toolchain() {
+    echo "=== Setting up toolchain ==="
+
+    local lib_dir
+    lib_dir=$(dirname "$(gcc -print-file-name=libmsvcrt.a)")
+    echo "  CRT lib dir: $lib_dir"
+
+    # ── Rename __acrt_iob_func → __iob_func in CRT archives ──────
+    for archive in "$lib_dir/libmingwex.a" "$lib_dir/libmsvcrt.a" "$lib_dir/libmingw32.a"; do
+        [ -f "$archive" ] || continue
+        echo "  Patching $(basename "$archive"): __acrt_iob_func → __iob_func"
+        local tmpdir=$(mktemp -d)
+        cd "$tmpdir"
+        ar x "$archive"
+        for obj in *.o; do
+            objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
+        done
+        ar rcs "$archive" *.o
+        cd "$SCRIPT_DIR"
+        rm -rf "$tmpdir"
+    done
+
+    # ── ucrtcompat stubs into libmsvcrt.a ─────────────────────────
+    cat > /tmp/ucrtcompat.c << 'UCEOF'
+/* No includes - avoid header conflicts */
+typedef unsigned long long _u64;
+typedef unsigned int _uint;
+typedef unsigned int _size;
+typedef void *_locale;
+typedef char _va_list[4];
+typedef void FILE;
+typedef unsigned short wchar_t;
+FILE * __cdecl __iob_func(void);
+int __cdecl _vsnprintf(char*,_size,const char*,...);
+int __cdecl _vsnwprintf(wchar_t*,_size,const wchar_t*,...);
+FILE * __cdecl __acrt_iob_func(_uint i){ return (char*)__iob_func()+i*32; }
+int __cdecl __stdio_common_vsprintf(_u64 o,char *b,_size n,const char *f,_locale l,_va_list a){ return _vsnprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); }
+int __cdecl __stdio_common_vsprintf_s(_u64 o,char *b,_size n,const char *f,_locale l,_va_list a){ return _vsnprintf(b,n,f,*(void**)a); }
+int __cdecl __stdio_common_vsprintf_p(_u64 o,char *b,_size n,const char *f,_locale l,_va_list a){ return _vsnprintf(b,n,f,*(void**)a); }
+int __cdecl __stdio_common_vsnprintf_s(_u64 o,char *b,_size n,_size c,const char *f,_locale l,_va_list a){ return _vsnprintf(b,c<n?c:n,f,*(void**)a); }
+int __cdecl __stdio_common_vfprintf(_u64 o,FILE *p,const char *f,_locale l,_va_list a){ return 0; }
+int __cdecl __stdio_common_vfprintf_s(_u64 o,FILE *p,const char *f,_locale l,_va_list a){ return 0; }
+int __cdecl __stdio_common_vfscanf(_u64 o,FILE *p,const char *f,_locale l,_va_list a){ return -1; }
+int __cdecl __stdio_common_vsscanf(_u64 o,const char *s,_size n,const char *f,_locale l,_va_list a){ return -1; }
+int __cdecl __stdio_common_vswprintf(_u64 o,wchar_t *b,_size n,const wchar_t *f,_locale l,_va_list a){ return _vsnwprintf(b,n==((_size)-1)?0x7fffffff:n,f,*(void**)a); }
+int __cdecl __stdio_common_vswprintf_s(_u64 o,wchar_t *b,_size n,const wchar_t *f,_locale l,_va_list a){ return _vsnwprintf(b,n,f,*(void**)a); }
+int __cdecl __stdio_common_vswprintf_p(_u64 o,wchar_t *b,_size n,const wchar_t *f,_locale l,_va_list a){ return _vsnwprintf(b,n,f,*(void**)a); }
+int __cdecl __stdio_common_vsnwprintf_s(_u64 o,wchar_t *b,_size n,_size c,const wchar_t *f,_locale l,_va_list a){ return _vsnwprintf(b,c<n?c:n,f,*(void**)a); }
+int __cdecl __stdio_common_vfwprintf(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list a){ return 0; }
+int __cdecl __stdio_common_vfwprintf_s(_u64 o,FILE *p,const wchar_t *f,_locale l,_va_list a){ return 0; }
+__asm__(".globl __imp____stdio_common_vsprintf\n.section .rdata,\"dr\"\n.align 4\n__imp____stdio_common_vsprintf:\n    .long ___stdio_common_vsprintf\n.globl __imp____stdio_common_vfprintf\n.align 4\n__imp____stdio_common_vfprintf:\n    .long ___stdio_common_vfprintf\n.globl __imp____stdio_common_vsscanf\n.align 4\n__imp____stdio_common_vsscanf:\n    .long ___stdio_common_vsscanf\n.text\n");
+UCEOF
+    gcc -nostdinc -c /tmp/ucrtcompat.c -o /tmp/ucrtcompat.o && \
+    ar rs "$lib_dir/libmsvcrt.a" /tmp/ucrtcompat.o && \
+    echo "  Injected ucrtcompat stubs into libmsvcrt.a"
+
+    # ── gcc wrapper: force -mcrtdll=msvcrt ─────────────────────────
+    printf '#!/bin/sh\nexec gcc -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT "$@"\n' \
+        > /tmp/wine-gcc
+    chmod +x /tmp/wine-gcc
+    CC=/tmp/wine-gcc
+    echo "  Created gcc wrapper at /tmp/wine-gcc"
+
+    echo "=== Toolchain ready ==="
+}
+
 # ── Build pthread9x library ───────────────────────────────────────
 build_pthread9x() {
     echo "=== Building pthread9x ==="
@@ -183,6 +250,18 @@ setup_cflags() {
             [ -f "$f" ] && sed -i 's/struct wined3d_context \*context, unsigned int location)/struct wined3d_context *context, DWORD location)/' "$f"
         done
     fi
+
+    # qemu-3dfx optimization: skip expensive GL context re-setup in needs_set branch
+    for f in "$wine_src/dlls/wined3d/context.c"; do
+        [ -f "$f" ] || continue
+        if grep -q 'else if (context->needs_set)' "$f"; then
+            sed -i '/else if (context->needs_set)/,/}/ s/context_set_gl_context(context);/context_enter(context);/' "$f"
+            echo "  Patched context.c: qemu-3dfx needs_set optimization"
+        elif grep -q 'else if (context_gl->needs_set)' "$f"; then
+            sed -i '/else if (context_gl->needs_set)/,/}/ s/wined3d_context_gl_set_gl_context(context_gl);/wined3d_context_gl_enter(context_gl);/' "$f"
+            echo "  Patched context.c: qemu-3dfx needs_set optimization (GL context)"
+        fi
+    done
 
     # Strip DUMMYUNIONNAME access (.u., .u1., .u2., .u1.s2.) from wined3d sources
     for f in "$wine_src/dlls/wined3d"/*.c; do
@@ -335,7 +414,7 @@ compile_dll() {
         [ -f "$c_file" ] || continue
         local obj="$obj_dir/${src%.c}.o"
         echo "  CC $dll_name/$src"
-        gcc "${dll_cflags[@]}" -c -o "$obj" "$c_file" 2>&1 | while read line; do
+        $CC "${dll_cflags[@]}" -c -o "$obj" "$c_file" 2>&1 | while read line; do
             # Only show errors, not warnings during normal build
             if [[ "$line" == *error* ]]; then
                 echo "    ERROR: $line"
@@ -348,7 +427,7 @@ compile_dll() {
 
     # Compile compact/debug.c
     echo "  CC $dll_name/debug.c"
-    gcc "${dll_cflags[@]}" -c -o "$obj_dir/_debug.o" "$WINE9X/compact/debug.c" 2>&1 || true
+    $CC "${dll_cflags[@]}" -c -o "$obj_dir/_debug.o" "$WINE9X/compact/debug.c" 2>&1 || true
 
     # For ddraw, compile exception.asm
     if [ "$dll_name" = "ddraw" ]; then
@@ -378,24 +457,21 @@ compile_compat() {
     echo '#include "'"$compat_file"'"' >> "$tmp"
 
     echo "  CC kernel32_compat.c"
-    gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_kernel32_compat.o" "$tmp" 2>&1 || true
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_kernel32_compat.o" "$tmp" 2>&1 || true
     rm -f "$tmp"
-
-    # Compile static copysign (avoids importing _copysign from msvcrt.dll)
-    gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_copysign.o" "$SCRIPT_DIR/docker/copysign.c"
 
     # Generate Vulkan stubs from undefined symbols in object files
     echo "  Generating Vulkan stubs"
     nm "$obj_dir"/*.o 2>/dev/null | grep ' U ' | grep 'vk' | \
         awk '{gsub(/^_/,"",$2); print $2}' | sort -u | \
         awk '{print "int " $1 "() { return 0; }"}' > /tmp/vk_stubs.c
-    gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_vk_stubs.o" /tmp/vk_stubs.c 2>/dev/null || true
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_vk_stubs.o" /tmp/vk_stubs.c 2>/dev/null || true
 
     # Compile vkd3d stubs (Wine 8.0.2+ exports vkd3d functions)
     local vkd3d_stubs="$(dirname "$obj_dir")/vkd3d_stubs.c"
     if [ -f "$vkd3d_stubs" ]; then
         echo "  CC vkd3d_stubs.c"
-        gcc "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_vkd3d_stubs.o" "$vkd3d_stubs" 2>/dev/null || true
+        $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_vkd3d_stubs.o" "$vkd3d_stubs" 2>/dev/null || true
     fi
 }
 
@@ -405,14 +481,13 @@ link_wined3d() {
     local pt_build="$WINE9X/pthread9x/build"
 
     echo "  LD wined3d.dll"
-    gcc -shared -static-libgcc \
+    $CC -shared -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
         -L"$pt_build" -lpthread \
         -lgdi32 -lopengl32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,"${output%.dll}.a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -426,14 +501,13 @@ link_d3d() {
     local wined3d_dir="$5"
 
     echo "  LD $dll_name.dll"
-    gcc -shared -static-libgcc \
+    $CC -shared -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
         -L"$wined3d_dir" -lwined3d \
         -lgdi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,"${output%.dll}.a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -447,14 +521,13 @@ link_ddraw() {
     local wined3d_dir="$4"
 
     echo "  LD ddraw.dll"
-    gcc -shared -static-libgcc \
+    $CC -shared -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
         -L"$wined3d_dir" -lwined3d \
         -luser32 -lgdi32 -ladvapi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,"${output%.dll}.a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -560,10 +633,36 @@ build_version() {
             "$wine_src/dlls/d3d8/d3d8_main.c"
     fi
 
-    # ── GetModuleHandleExW redirect (wined3d + ddraw) ──
-    for f in "$wine_src/dlls/wined3d"/*.c "$wine_src/dlls/ddraw"/*.c; do
+    # ── W-version API redirects → kernel32_compat wrappers ──
+    for f in "$wine_src/dlls/wined3d"/*.c; do
         [ -f "$f" ] || continue
-        case "$f" in */kernel32_compat.c|*/d3dkmt_stubs.c|*/qemu3dfx_hooks.c|*/qemu3dfx_ddraw*) continue ;; esac
+        case "$f" in */kernel32_compat.c|*/d3dkmt_stubs.c|*/qemu3dfx_hooks.c) continue ;; esac
+        for _func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
+                    GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
+                    ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread \
+                    GetModuleHandleExW \
+                    GetVersionExW; do
+            grep -q "$_func" "$f" 2>/dev/null || continue
+            case "$_func" in
+                EnumDisplayDevicesW) _compat=wine_k32compat_EDD_W ;;
+                EnumDisplaySettingsW) _compat=wine_k32compat_EDS_W ;;
+                EnumDisplaySettingsExW) _compat=wine_k32compat_EDSE_W ;;
+                GetMonitorInfoW) _compat=wine_k32compat_GMI_W ;;
+                EnumDisplayMonitors) _compat=wine_k32compat_EDM ;;
+                MonitorFromWindow) _compat=wine_k32compat_MFW ;;
+                MonitorFromPoint) _compat=wine_k32compat_MFP ;;
+                ChangeDisplaySettingsExW) _compat=wine_k32compat_CDSE_W ;;
+                IsBadStringPtrW) _compat=wine_k32compat_IBSP_W ;;
+                FreeLibraryAndExitThread) _compat=wine_k32compat_FLAET ;;
+                GetModuleHandleExW) _compat=wine_k32compat_GMHEW ;;
+                GetVersionExW) _compat=wine_k32compat_GVXW ;;
+            esac
+            sed -i "1i #define $_func $_compat" "$f"
+        done
+    done
+    for f in "$wine_src/dlls/ddraw"/*.c; do
+        [ -f "$f" ] || continue
+        case "$f" in */kernel32_compat.c|*/qemu3dfx_ddraw*) continue ;; esac
         grep -q 'GetModuleHandleExW' "$f" 2>/dev/null || continue
         sed -i '1i #define GetModuleHandleExW wine_k32compat_GMHEW' "$f"
     done
@@ -682,6 +781,9 @@ main() {
         cd "$WINE9X" && git submodule update --init --recursive
         cd "$SCRIPT_DIR"
     fi
+
+    # Setup toolchain (symbol rename, ucrtcompat, gcc wrapper)
+    setup_toolchain
 
     # Build pthread9x if needed
     if [ ! -f "$WINE9X/pthread9x/build/libpthread.a" ]; then

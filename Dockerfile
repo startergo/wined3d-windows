@@ -1,61 +1,58 @@
 FROM --platform=linux/amd64 archlinux:base-devel
 
-# ── Layer 1: system packages ────────────────────────────────────────
+# ── Layer 1: system packages (pinned toolchain for Win98-compatible PE) ──
+# Reference working build: binutils 2.44-1, gcc 14.2.0-3
 RUN sed -i '/^#\[multilib\]/{N;s/#\[multilib\]\n#Include/\[multilib\]\nInclude/}' /etc/pacman.conf && \
+    echo -e "IgnorePkg = mingw-w64-gcc mingw-w64-binutils" \
+        >> /etc/pacman.conf && \
     pacman-key --init && \
     pacman -Syu --noconfirm --disable-sandbox && \
     pacman -S --noconfirm --disable-sandbox \
         git wget \
-        mingw-w64-gcc \
-        mingw-w64-binutils \
-        mingw-w64-headers \
-        mingw-w64-winpthreads \
+        mingw-w64-headers mingw-w64-winpthreads \
         flex bison mesa \
-        lib32-gcc-libs lib32-glibc
+        lib32-gcc-libs lib32-glibc && \
+    pacman -U --noconfirm --disable-sandbox \
+        https://archive.archlinux.org/packages/m/mingw-w64-gcc/mingw-w64-gcc-14.2.0-3-x86_64.pkg.tar.zst \
+        https://archive.archlinux.org/packages/m/mingw-w64-binutils/mingw-w64-binutils-2.44-1-x86_64.pkg.tar.zst && \
+    echo "=== Toolchain ===" && \
+    i686-w64-mingw32-ld --version | head -1 && \
+    i686-w64-mingw32-gcc --version | head -1
 
-# ── Layer 2: AUR mingw-w64-crt-git ─────────────────────────────────
-RUN useradd -m builder && \
-    echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-
-USER builder
-RUN git clone https://aur.archlinux.org/yay-bin.git /tmp/yay-bin && \
-    cd /tmp/yay-bin && \
-    makepkg --noconfirm -si && \
-    rm -rf /tmp/yay-bin && \
-    cd /tmp && \
+# ── Layer 2: Build CRT from reference commit ────────────────────────
+# Pin to ea22a99cb (12.0.0+480 commits) — same CRT as the working reference build.
+RUN git clone https://github.com/mingw-w64/mingw-w64.git /tmp/mingw-w64 && \
+    cd /tmp/mingw-w64 && \
+    git checkout ea22a99cb06640697c45657e17bd5cb9603e62d7 && \
     \
-    git clone https://aur.archlinux.org/mingw-w64-crt-git.git /tmp/mingw-crt && \
-    cd /tmp/mingw-crt && \
-    sed -i \
-        -e 's/mingw-w64-headers-git[^"'"'"' ]*/mingw-w64-headers/g' \
-        -e 's/mingw-w64-gcc-base/mingw-w64-gcc/g' \
-        -e 's|git+https://git.code.sf.net/p/mingw-w64/mingw-w64|git+https://github.com/mingw-w64/mingw-w64.git|g' \
-        PKGBUILD && \
-    if grep -q 'with-default-msvcrt' PKGBUILD; then \
-        sed -i 's/--with-default-msvcrt=[a-zA-Z]*/--with-default-msvcrt=msvcrt/g' PKGBUILD; \
-    else \
-        sed -i 's|_crt_configure_args="\(.*\)"|_crt_configure_args="\1 --with-default-msvcrt=msvcrt"|g' PKGBUILD; \
-    fi && \
-    sudo pacman -Rdd --noconfirm mingw-w64-crt 2>/dev/null || true && \
-    MAKEFLAGS="-j$(nproc)" makepkg --noconfirm -d && \
-    sudo pacman -U --noconfirm /tmp/mingw-crt/mingw-w64-crt-git-*.pkg.tar.zst && \
-    rm -rf /tmp/mingw-crt
-USER root
+    mkdir -p /tmp/headers-build && cd /tmp/headers-build && \
+    /tmp/mingw-w64/mingw-w64-headers/configure \
+        --host=i686-w64-mingw32 --prefix=/usr/i686-w64-mingw32 \
+        --enable-sdk=all && \
+    make -j$(nproc) install && \
+    \
+    mkdir -p /tmp/crt-build && cd /tmp/crt-build && \
+    /tmp/mingw-w64/mingw-w64-crt/configure \
+        --host=i686-w64-mingw32 --prefix=/usr/i686-w64-mingw32 \
+        --with-default-msvcrt=msvcrt && \
+    make -j$(nproc) && \
+    make install && \
+    \
+    echo "=== CRT built from mingw-w64 commit $(cd /tmp/mingw-w64 && git rev-parse --short HEAD) ===" && \
+    rm -rf /tmp/mingw-w64 /tmp/headers-build /tmp/crt-build
 
 ARG WINE_VERSION=8.0.2
 ARG WINE_BRANCH=8.0
 ARG WINE_EXT=tar.xz
-ARG BUILD_MSVCRT=0
 
-# ── Source files for qemu-3dfx + Win98 compat ───────────────────────
+# ── Source files for qemu-3dfx ──────────────────────────────────────
 COPY qemu3dfx_hooks.c /docker/qemu3dfx_hooks.c
 COPY qemu3dfx_ddraw_hooks.c /docker/qemu3dfx_ddraw_hooks.c
 COPY qemu3dfx_ddraw_passthrough.c /docker/qemu3dfx_ddraw_passthrough.c
 COPY docker/d3dkmt_stubs.c /docker/d3dkmt_stubs.c
 COPY docker/kernel32_compat.c /docker/kernel32_compat.c
 COPY docker/patch_pe_win98.py /docker/patch_pe_win98.py
-COPY docker/msvcrt_stdio_stubs.c /docker/msvcrt_stdio_stubs.c
-COPY docker/copysign.c /docker/copysign.c
+
 
 # ── Build layer: wine9x direct compilation ──────────────────────────
 RUN \
@@ -66,7 +63,7 @@ RUN \
     # ── Force msvcrt via gcc wrapper ──────────────────────────────────
     mv /usr/bin/i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc.orig && \
     \
-    # ── Rename __acrt_iob_func → __iob_func in ALL CRT archives ──────
+    # ── Rename __acrt_iob_func → __iob_func in CRT archives ──────
     for archive in \
         /usr/i686-w64-mingw32/lib/libmingwex.a \
         /usr/i686-w64-mingw32/lib/libmsvcrt.a \
@@ -83,7 +80,7 @@ RUN \
         cd / && rm -rf "$tmpdir"; \
     done && \
     \
-    # ── ucrtcompat stubs into libmsvcrt.a ─────────────────────────────
+    # ── ucrtcompat stubs into libmsvcrt.a ─────────────────────────
     printf '%s\n' \
         '/* No includes - avoid header conflicts */' \
         'typedef unsigned long long _u64;' \
@@ -114,14 +111,10 @@ RUN \
         > /tmp/ucrtcompat.c && \
     echo '__asm__(".globl __imp____stdio_common_vsprintf\n.section .rdata,\"dr\"\n.align 4\n__imp____stdio_common_vsprintf:\n    .long ___stdio_common_vsprintf\n.globl __imp____stdio_common_vfprintf\n.align 4\n__imp____stdio_common_vfprintf:\n    .long ___stdio_common_vfprintf\n.globl __imp____stdio_common_vsscanf\n.align 4\n__imp____stdio_common_vsscanf:\n    .long ___stdio_common_vsscanf\n.text\n");' \
         >> /tmp/ucrtcompat.c && \
-    echo '__asm__(".globl __imp__IsBadStringPtrW@8\n.section .rdata,\"dr\"\n.align 4\n__imp__IsBadStringPtrW@8:\n    .long _IsBadStringPtrA@8\n.text\n");' \
-        > /tmp/ibspw_compat.c && \
     /usr/bin/i686-w64-mingw32-gcc.orig -nostdinc -c \
         /tmp/ucrtcompat.c -o /tmp/ucrtcompat.o && \
-    /usr/bin/i686-w64-mingw32-gcc.orig -c \
-        /tmp/ibspw_compat.c -o /tmp/ibspw_compat.o && \
     i686-w64-mingw32-ar rs \
-        /usr/i686-w64-mingw32/lib/libmsvcrt.a /tmp/ucrtcompat.o /tmp/ibspw_compat.o && \
+        /usr/i686-w64-mingw32/lib/libmsvcrt.a /tmp/ucrtcompat.o && \
     \
     # ── gcc wrapper ────────────────────────────────────────────────────
     printf '#!/bin/sh\nexec /usr/bin/i686-w64-mingw32-gcc.orig -mcrtdll=msvcrt -D__MSVCRT__ -U_UCRT "$@"\n' \
@@ -233,26 +226,27 @@ RUN \
             dlls/d3d8/d3d8_main.c; \
     fi && \
     \
-    # ── GetModuleHandleExW redirect (wined3d + ddraw) ──────────────────
-    for f in dlls/wined3d/*.c dlls/ddraw/*.c; do \
-        [ -f "$f" ] || continue; \
-        case "$f" in */kernel32_compat.c|*/d3dkmt_stubs.c|*/qemu3dfx_hooks.c|*/qemu3dfx_ddraw*) continue ;; esac; \
-        grep -q 'GetModuleHandleExW' "$f" 2>/dev/null || continue; \
-        sed -i '1i #define GetModuleHandleExW wine_k32compat_GMHEW' "$f"; \
-    done && \
-    \
     # ── RtlIsCriticalSectionLockedByThread redirect (3.0.5+) ──
     if [ -f dlls/wined3d/cs.c ]; then \
         sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/1/' dlls/wined3d/cs.c; \
     fi && \
     \
-    # ── User32 W-version redirects (wined3d only) ─────────────────────
+    # ── Strip Win98-incompatible API calls ──
+    # GetModuleHandleExW in ddraw/main.c → just use inst
+    for f in dlls/ddraw/main.c; do \
+        [ -f "$f" ] || continue; \
+        perl -i -p0e 's/if \(!GetModuleHandleExW\(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS \| GET_MODULE_HANDLE_EX_FLAG_PIN,\s*\n\s*\(const WCHAR \*\)&ddraw_self, &ddraw_self\)\)\s*\n\s*ERR\("Failed to get own module handle\.\\n"\);/ddraw_self = inst;/g' "$f"; \
+    done && \
+    \
+    # ── W-version API redirects → kernel32_compat wrappers ──
     for f in dlls/wined3d/*.c; do \
         [ -f "$f" ] || continue; \
         case "$f" in */kernel32_compat.c|*/d3dkmt_stubs.c|*/qemu3dfx_hooks.c) continue ;; esac; \
         for _func in EnumDisplayDevicesW EnumDisplaySettingsW EnumDisplaySettingsExW \
                     GetMonitorInfoW EnumDisplayMonitors MonitorFromWindow MonitorFromPoint \
-                    ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread; do \
+                    ChangeDisplaySettingsExW IsBadStringPtrW FreeLibraryAndExitThread \
+                    GetModuleHandleExW \
+	                    GetVersionExW; do \
             grep -q "$_func" "$f" 2>/dev/null || continue; \
             case "$_func" in \
                 EnumDisplayDevicesW) _compat=wine_k32compat_EDD_W ;; \
@@ -265,16 +259,21 @@ RUN \
                 ChangeDisplaySettingsExW) _compat=wine_k32compat_CDSE_W ;; \
                 IsBadStringPtrW) _compat=wine_k32compat_IBSP_W ;; \
                 FreeLibraryAndExitThread) _compat=wine_k32compat_FLAET ;; \
+                GetModuleHandleExW) _compat=wine_k32compat_GMHEW ;; \
+                GetVersionExW) _compat=wine_k32compat_GVXW ;; \
             esac; \
             sed -i "1i #define $_func $_compat" "$f"; \
         done; \
     done && \
+    for f in dlls/ddraw/*.c; do \
+        [ -f "$f" ] || continue; \
+        case "$f" in */kernel32_compat.c|*/qemu3dfx_ddraw*) continue ;; esac; \
+        grep -q 'GetModuleHandleExW' "$f" 2>/dev/null || continue; \
+        sed -i '1i #define GetModuleHandleExW wine_k32compat_GMHEW' "$f"; \
+    done && \
     \
     # ══════════════════════════════════════════════════════════════════
     #  HEADER SETUP
-    #  - Remove wine9x's outdated wine/wined3d.h (Wine's own is newer)
-    #  - Patch Wine union access (.u1.s2./.u5.) for MinGW-w64 (anonymous)
-    #    Only wined3d — ddraw uses wine9x's headers with named unions
     # ══════════════════════════════════════════════════════════════════
     \
     mv /wine9x/include/wine/wined3d.h /wine9x/include/wine/wined3d.h.wine9x && \
@@ -295,14 +294,24 @@ RUN \
         done; \
     fi && \
     \
-    # ── Strip DUMMYUNIONNAME access (.u., .u1., .u2., .u1.s2.) from wined3d sources ──
+    # ── qemu-3dfx: skip expensive GL context re-setup in needs_set branch ──
+    for f in dlls/wined3d/context.c; do \
+        [ -f "$f" ] || continue; \
+        if grep -q 'else if (context->needs_set)' "$f"; then \
+            sed -i '/else if (context->needs_set)/,/}/ s/context_set_gl_context(context);/context_enter(context);/' "$f"; \
+        elif grep -q 'else if (context_gl->needs_set)' "$f"; then \
+            sed -i '/else if (context_gl->needs_set)/,/}/ s/wined3d_context_gl_set_gl_context(context_gl);/wined3d_context_gl_enter(context_gl);/' "$f"; \
+        fi; \
+    done && \
+    \
+    # ── Strip DUMMYUNIONNAME access from wined3d sources ──
     for f in dlls/wined3d/*.c; do \
         [ -f "$f" ] && sed -i 's/\.u[0-9][0-9]*\.s[0-9][0-9]*\./\./g; s/\.u[0-9][0-9]*\./\./g; s#->u[0-9][0-9]*\.s[0-9][0-9]*\.#->#g; s#->u[0-9][0-9]*\.#->#g' "$f"; \
     done && \
     [ -f dlls/wined3d/directx.c ] && \
         sed -i 's/\.u\./\./g; s#->u\.#->#g' dlls/wined3d/directx.c && \
     \
-    # ── Fix RTL_CRITICAL_SECTION_DEBUG Spare field (removed in newer MinGW-w64) ──
+    # ── Fix RTL_CRITICAL_SECTION_DEBUG Spare field ──
     for f in dlls/wined3d/wined3d_private.h; do \
         [ -f "$f" ] && sed -i 's/->Spare\[0\] *=.*;/;/' "$f"; \
     done && \
@@ -311,10 +320,10 @@ RUN \
     printf '#ifndef VKD3D_STUB_H\n#define VKD3D_STUB_H\n#include <stdarg.h>\ntypedef void (*PFN_vkd3d_log_callback)(const char *, va_list);\nstatic inline void vkd3d_set_log_callback(PFN_vkd3d_log_callback cb) { (void)cb; }\n#endif\n' > include/vkd3d.h && \
     printf '#ifndef D3D12_STUB_H\n#define D3D12_STUB_H\n#endif\n' > include/d3d12.h && \
     \
-    # ── Hollow out vkd3d_log_callback (uses undeclared vsnprintf/__wine_dbg_output) ──
+    # ── Hollow out vkd3d_log_callback ──
     sed -i '/^static void vkd3d_log_callback/,/^}/c\static void vkd3d_log_callback(const char *fmt, va_list args) {}' dlls/wined3d/wined3d_main.c && \
     \
-    # ── Remove spirv_shader_backend_cleanup call (shader_spirv.c excluded, 6.0+) ──
+    # ── Remove spirv_shader_backend_cleanup call ──
     sed -i '/wined3d_spirv_shader_backend_cleanup/d' dlls/wined3d/wined3d_main.c && \
     \
     # ══════════════════════════════════════════════════════════════════
@@ -338,7 +347,7 @@ RUN \
         fi; \
     done && \
     \
-    # ── Generate vkd3d stubs (Wine 8.0.2 exports vkd3d functions) ───────
+    # ── Generate vkd3d stubs (Wine 8.0.2) ──
     if grep -q 'vkd3d' dlls/wined3d/wined3d.spec 2>/dev/null; then \
         grep -E '^\s*@\s+(stdcall|cdecl)\s+vkd3d' dlls/wined3d/wined3d.spec | \
             sed -E 's/^\s*@\s+(stdcall|cdecl)\s+([A-Za-z_][A-Za-z0-9_]*).*/int \2() { return 0; }/' \
@@ -413,7 +422,6 @@ RUN \
     $CC $CFLAGS -c -o /tmp/obj_wined3d/_debug.o /wine9x/compact/debug.c 2>/dev/null || true && \
     echo "  CC wined3d/kernel32_compat.c" && \
     $CC $CFLAGS -DK32COMPAT_DISPLAY_WRAPPERS -c -o /tmp/obj_wined3d/_kernel32_compat.o /docker/kernel32_compat.c 2>/dev/null || true && \
-    $CC $CFLAGS -c -o /tmp/obj_wined3d/_copysign.o /docker/copysign.c && \
     echo "  Generating Vulkan stubs from undefined symbols" && \
     nm /tmp/obj_wined3d/*.o 2>/dev/null | grep ' U ' | grep 'vk' | \
         awk '{gsub(/^_/,"",$2); print $2}' | sort -u | \
@@ -431,7 +439,6 @@ RUN \
         -L/wine9x/pthread9x/build -lpthread \
         -lgdi32 -lopengl32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,/tmp/libwined3d.a \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -448,7 +455,6 @@ RUN \
     done && \
     $CC $CFLAGS -c -o /tmp/obj_d3d9/_debug.o /wine9x/compact/debug.c 2>/dev/null || true && \
     $CC $CFLAGS -c -o /tmp/obj_d3d9/_kernel32_compat.o /docker/kernel32_compat.c 2>/dev/null || true && \
-    $CC $CFLAGS -c -o /tmp/obj_d3d9/_copysign.o /docker/copysign.c && \
     echo "  LD d3d9.dll" && \
     $CC -shared -static-libgcc \
         -o /tmp/d3d9.dll \
@@ -456,7 +462,6 @@ RUN \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -lgdi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,/tmp/libd3d9.a \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -473,7 +478,6 @@ RUN \
     done && \
     $CC $CFLAGS -c -o /tmp/obj_d3d8/_debug.o /wine9x/compact/debug.c 2>/dev/null || true && \
     $CC $CFLAGS -c -o /tmp/obj_d3d8/_kernel32_compat.o /docker/kernel32_compat.c 2>/dev/null || true && \
-    $CC $CFLAGS -c -o /tmp/obj_d3d8/_copysign.o /docker/copysign.c && \
     echo "  LD d3d8.dll" && \
     $CC -shared -static-libgcc \
         -o /tmp/d3d8.dll \
@@ -481,7 +485,6 @@ RUN \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -lgdi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,/tmp/libd3d8.a \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -489,9 +492,7 @@ RUN \
     cp /tmp/d3d8.dll /output/${WINE_VERSION}/ && \
     echo "  Built d3d8.dll" && \
     \
-    # ── ddraw (uses wine9x mingw/ headers with named unions) ──
-    # Stock Wine source uses .u1.x patterns via NONAMELESSUNION that match wine9x's union names.
-    # Use empty DUMMYUNIONNAME so unions are anonymous and NONAMELESSUNION access works.
+    # ── ddraw ──
     echo "=== Compiling ddraw ===" && \
     DDRAW_CFLAGS="$CFLAGS -DDUMMYUNIONNAME= -DDUMMYUNIONNAME1= -DDUMMYUNIONNAME2= -DDUMMYUNIONNAME3= -DDUMMYUNIONNAME4= -DDUMMYUNIONNAME5= -DDUMMYUNIONNAME6= -DDUMMYUNIONNAME7= -DDUMMYUNIONNAME8=" && \
     DDRAW_CFLAGS="$DDRAW_CFLAGS -Idlls/ddraw -DDECL_WINELIB_TYPE_AW(type)= -DWINELIB_NAME_AW(func)=func##A -D__MSABI_LONG(x)=x##l -DINITGUID -D__TRY=if(1) -D__EXCEPT_PAGE_FAULT=else -D__ENDTRY=" && \
@@ -502,7 +503,6 @@ RUN \
     done && \
     $CC $CFLAGS -c -o /tmp/obj_ddraw/_debug.o /wine9x/compact/debug.c 2>/dev/null || true && \
     $CC $CFLAGS -c -o /tmp/obj_ddraw/_kernel32_compat.o /docker/kernel32_compat.c 2>/dev/null || true && \
-    $CC $CFLAGS -c -o /tmp/obj_ddraw/_copysign.o /docker/copysign.c && \
     echo "  LD ddraw.dll" && \
     $CC -shared -static-libgcc \
         -o /tmp/ddraw.dll \
@@ -510,7 +510,6 @@ RUN \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -luser32 -lgdi32 -ladvapi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--kill-at \
         -Wl,--out-implib,/tmp/libddraw.a \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -522,25 +521,33 @@ RUN \
     #  POST-PROCESSING
     # ══════════════════════════════════════════════════════════════════
     \
-    # ── ucrtbase → msvcrt binary patch ─────────────────────────────────
+    # ── ucrtbase → msvcrt binary patch ──
     python3 -c "import os,glob;[open(p,'wb').write(d.replace(b'ucrtbase.dll\x00',b'msvcrt.dll\x00\x00\x00')) or print('Patched:',os.path.basename(p)) for p in glob.glob('/output/${WINE_VERSION}/*.dll') for d in [open(p,'rb').read()] if b'ucrtbase.dll\x00' in d]" && \
     \
-    # ── Strip ──────────────────────────────────────────────────────────
+    # ── Strip ──
     for dll in /output/${WINE_VERSION}/*.dll; do \
         i686-w64-mingw32-strip "$dll" 2>/dev/null && echo "Stripped $(basename $dll)"; \
     done && \
     \
-    # ── PE patching for Win98 ──────────────────────────────────────────
+    # ── PE patching for Win98 ──
     python3 /docker/patch_pe_win98.py /output/${WINE_VERSION} && \
     \
-    # ── Timestamp ─────────────────────────────────────────────────────
-    printf "Built on %s\n  binutils %s\n  crt-git %s\n  gcc-libs %s\n" \
+    # ── Timestamp ──
+    printf "Built on %s\n  binutils %s\n  mingw-w64-crt %s\n  mingw-w64-gcc %s\n" \
         "$(date '+%T %b %-e %Y')" \
         "$(pacman -Q mingw-w64-binutils | awk '{print $2}')" \
-        "$(pacman -Q mingw-w64-crt-git  | awk '{print $2}')" \
-        "$(pacman -Q gcc-libs           | awk '{print $2}')" \
+        "ea22a99cb (12.0.0+480)" \
+        "$(pacman -Q mingw-w64-gcc     | awk '{print $2}')" \
         > /output/${WINE_VERSION}/build-timestamp && \
     chmod +x /output/${WINE_VERSION}/build-timestamp && \
     \
-    # ── Cleanup ───────────────────────────────────────────────────────
+    # ── Minimal test DLL (diagnostic: does the toolchain itself produce Win98-compatible PE?) ──
+    printf '#include <windows.h>\nBOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p) { (void)h;(void)p; if(r==DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(h); return TRUE; }\n' \
+        > /tmp/test_minimal.c && \
+    $CC -shared -static-libgcc -o /output/${WINE_VERSION}/test_minimal.dll /tmp/test_minimal.c \
+        -Wl,--image-base,0x10000000 && \
+    i686-w64-mingw32-strip /output/${WINE_VERSION}/test_minimal.dll 2>/dev/null && \
+    echo "  Built test_minimal.dll (diagnostic)" && \
+    \
+    # ── Cleanup ──
     cd / && rm -rf wine-${WINE_VERSION} wine9x

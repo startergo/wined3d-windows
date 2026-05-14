@@ -325,6 +325,31 @@ int __stdcall wine_k32compat_IBSP_W(const unsigned short *lpsz, unsigned long uc
     return IsBadStringPtrA((const char *)lpsz, ucchMax * 2);
 }
 
+/* --- GetVersionExW (Win98 only has GetVersionExA) --- */
+typedef struct { DWORD dwOSVersionInfoSize; DWORD dwMajorVersion; DWORD dwMinorVersion;
+  DWORD dwBuildNumber; DWORD dwPlatformId; unsigned char szCSDVersion[128]; } OSVERSIONINFOA_LOCAL;
+BOOL __stdcall GetVersionExA(OSVERSIONINFOA_LOCAL *);
+BOOL __stdcall wine_k32compat_GVXW(void *info_w)
+{
+    OSVERSIONINFOA_LOCAL via;
+    DWORD *dw = (DWORD *)info_w;
+    unsigned short *csd;
+    int i;
+    if(!info_w) return 0;
+    memset(&via, 0, sizeof(via));
+    via.dwOSVersionInfoSize = sizeof(via);
+    if(!GetVersionExA(&via)) return 0;
+    dw[1] = via.dwMajorVersion;
+    dw[2] = via.dwMinorVersion;
+    dw[3] = via.dwBuildNumber;
+    dw[4] = via.dwPlatformId;
+    csd = (unsigned short *)((char *)info_w + 20);
+    for(i = 0; i < 127 && via.szCSDVersion[i]; i++)
+        csd[i] = (unsigned short)via.szCSDVersion[i];
+    csd[i] = 0;
+    return 1;
+}
+
 /* --- FreeLibraryAndExitThread (Win2000+, not on Win98) --- */
 int __stdcall FreeLibrary(void *);
 void __stdcall ExitThread(unsigned long);
@@ -465,6 +490,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__wine_k32compat_FLAET@8:\n"
     "    .long _wine_k32compat_FLAET@8\n"
+    ".globl __imp__wine_k32compat_GVXW@4\n"
+    ".align 4\n"
+    "__imp__wine_k32compat_GVXW@4:\n"
+    "    .long _wine_k32compat_GVXW@4\n"
     ".text\n"
 );
 

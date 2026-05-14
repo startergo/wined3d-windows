@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Strip COFF debug sections from PE DLLs."""
+"""Patch PE DLLs for Win98 compatibility: set NO_SEH flag, strip COFF debug sections."""
 import struct, glob, os, sys
+
+# DllCharacteristics flags
+NO_SEH = 0x0400
 
 outdir = sys.argv[1] if len(sys.argv) > 1 else '/output'
 for dll in glob.glob(os.path.join(outdir, '*.dll')):
@@ -11,6 +14,14 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
         opt = pe_off + 24
         opt_size = struct.unpack_from('<H', data, coff + 16)[0]
         nsec = struct.unpack_from('<H', data, coff + 2)[0]
+
+        # Set NO_SEH flag in DllCharacteristics (match reference DLLs: 0x0540)
+        dll_chars = struct.unpack_from('<H', data, opt + 70)[0]
+        if not (dll_chars & NO_SEH):
+            dll_chars |= NO_SEH
+            f.seek(opt + 70)
+            f.write(struct.pack('<H', dll_chars))
+            print(f'  Set NO_SEH flag: DllChars={hex(dll_chars)} ({os.path.basename(dll)})')
 
         sec_off = opt + opt_size
         strip = [i for i in range(nsec)
