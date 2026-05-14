@@ -458,14 +458,8 @@ compile_compat() {
         return
     fi
 
-    # Create a temp file with K32COMPAT_DISPLAY_WRAPPERS defined
-    local tmp="$obj_dir/_kernel32_compat.c"
-    echo '#define K32COMPAT_DISPLAY_WRAPPERS' > "$tmp"
-    echo '#include "'"$compat_file"'"' >> "$tmp"
-
     echo "  CC kernel32_compat.c"
-    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_kernel32_compat.o" "$tmp" 2>&1 || true
-    rm -f "$tmp"
+    $CC "${CFLAGS_LIST[@]}" -DK32COMPAT_DISPLAY_WRAPPERS -c -o "$obj_dir/_kernel32_compat.o" "$compat_file" 2>&1 || true
 
     # Generate Vulkan stubs from undefined symbols in object files
     echo "  Generating Vulkan stubs"
@@ -495,7 +489,7 @@ link_wined3d() {
         -L"$pt_build" -lpthread \
         -lgdi32 -lopengl32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--out-implib,"${output%.dll}.a" \
+        -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
         "$def_file" 2>&1
@@ -515,7 +509,7 @@ link_d3d() {
         -L"$wined3d_dir" -lwined3d \
         -lgdi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--out-implib,"${output%.dll}.a" \
+        -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
         "$def_file" 2>&1
@@ -535,7 +529,7 @@ link_ddraw() {
         -L"$wined3d_dir" -lwined3d \
         -luser32 -lgdi32 -ladvapi32 \
         -Wl,--allow-multiple-definition \
-        -Wl,--out-implib,"${output%.dll}.a" \
+        -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
         "$def_file" 2>&1
