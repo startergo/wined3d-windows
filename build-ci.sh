@@ -63,15 +63,7 @@ setup_toolchain() {
     for archive in "$lib_dir/libmingwex.a" "$lib_dir/libmsvcrt.a" "$lib_dir/libmingw32.a"; do
         [ -f "$archive" ] || continue
         echo "  Patching $(basename "$archive"): __acrt_iob_func → __iob_func"
-        local tmpdir=$(mktemp -d)
-        cd "$tmpdir"
-        ar x "$archive"
-        for obj in *.o; do
-            objcopy --redefine-sym ___acrt_iob_func=___iob_func "$obj" 2>/dev/null || true
-        done
-        ar rcs "$archive" *.o
-        cd "$SCRIPT_DIR"
-        rm -rf "$tmpdir"
+        objcopy --redefine-sym ___acrt_iob_func=___iob_func "$archive" 2>/dev/null || true
     done
 
     # ── ucrtcompat stubs into libmsvcrt.a ─────────────────────────
