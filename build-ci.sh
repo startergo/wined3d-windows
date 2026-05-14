@@ -735,6 +735,7 @@ build_version() {
             continue
         fi
         if compile_dll "$dll_name" "$wine_src" "$dll_objs"; then
+            compile_compat "$dll_objs"
             if [ "$dll_name" = "ddraw" ]; then
                 link_ddraw "$dll_objs" "$build_dir/$dll_name.dll" "$def_file" "$build_dir"
             else
