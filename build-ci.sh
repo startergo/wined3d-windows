@@ -461,6 +461,10 @@ compile_compat() {
     echo "  CC kernel32_compat.c"
     $CC "${CFLAGS_LIST[@]}" -DK32COMPAT_DISPLAY_WRAPPERS -c -o "$obj_dir/_kernel32_compat.o" "$compat_file" 2>&1 || true
 
+    # Compile nocrt entry point (bypasses full CRT startup — matches reference DLLs)
+    echo "  CC nocrt_entry.c"
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_nocrt_entry.o" "$SCRIPT_DIR/docker/nocrt_entry.c" 2>&1 || true
+
     # Generate Vulkan stubs from undefined symbols in object files
     echo "  Generating Vulkan stubs"
     nm "$obj_dir"/*.o 2>/dev/null | grep ' U ' | grep 'vk' | \

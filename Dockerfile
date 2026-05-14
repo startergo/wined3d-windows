@@ -51,6 +51,7 @@ COPY qemu3dfx_ddraw_hooks.c /docker/qemu3dfx_ddraw_hooks.c
 COPY qemu3dfx_ddraw_passthrough.c /docker/qemu3dfx_ddraw_passthrough.c
 COPY docker/d3dkmt_stubs.c /docker/d3dkmt_stubs.c
 COPY docker/kernel32_compat.c /docker/kernel32_compat.c
+COPY docker/nocrt_entry.c /docker/nocrt_entry.c
 COPY docker/patch_pe_win98.py /docker/patch_pe_win98.py
 
 
@@ -422,6 +423,8 @@ RUN \
     $CC $CFLAGS -c -o /tmp/obj_wined3d/_debug.o /wine9x/compact/debug.c 2>/dev/null || true && \
     echo "  CC wined3d/kernel32_compat.c" && \
     $CC $CFLAGS -DK32COMPAT_DISPLAY_WRAPPERS -c -o /tmp/obj_wined3d/_kernel32_compat.o /docker/kernel32_compat.c 2>/dev/null || true && \
+    echo "  CC nocrt_entry.c" && \
+    $CC $CFLAGS -c -o /tmp/_nocrt_entry.o /docker/nocrt_entry.c && \
     echo "  Generating Vulkan stubs from undefined symbols" && \
     nm /tmp/obj_wined3d/*.o 2>/dev/null | grep ' U ' | grep 'vk' | \
         awk '{gsub(/^_/,"",$2); print $2}' | sort -u | \
@@ -435,6 +438,7 @@ RUN \
     $CC -shared -static-libgcc \
         -o /tmp/wined3d.dll \
         /tmp/obj_wined3d/*.o \
+        /tmp/_nocrt_entry.o \
         /wine9x/pthread9x/build/crtfix.o \
         -L/wine9x/pthread9x/build -lpthread \
         -lgdi32 -lopengl32 \
@@ -459,6 +463,7 @@ RUN \
     $CC -shared -static-libgcc \
         -o /tmp/d3d9.dll \
         /tmp/obj_d3d9/*.o \
+        /tmp/_nocrt_entry.o \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -lgdi32 \
         -Wl,--allow-multiple-definition \
@@ -482,6 +487,7 @@ RUN \
     $CC -shared -static-libgcc \
         -o /tmp/d3d8.dll \
         /tmp/obj_d3d8/*.o \
+        /tmp/_nocrt_entry.o \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -lgdi32 \
         -Wl,--allow-multiple-definition \
@@ -507,6 +513,7 @@ RUN \
     $CC -shared -static-libgcc \
         -o /tmp/ddraw.dll \
         /tmp/obj_ddraw/*.o \
+        /tmp/_nocrt_entry.o \
         /wine9x/pthread9x/build/crtfix.o \
         -L/tmp -lwined3d -luser32 -lgdi32 -ladvapi32 \
         -Wl,--allow-multiple-definition \
@@ -540,14 +547,6 @@ RUN \
         "$(pacman -Q mingw-w64-gcc     | awk '{print $2}')" \
         > /output/${WINE_VERSION}/build-timestamp && \
     chmod +x /output/${WINE_VERSION}/build-timestamp && \
-    \
-    # ── Minimal test DLL (diagnostic: does the toolchain itself produce Win98-compatible PE?) ──
-    printf '#include <windows.h>\nBOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p) { (void)h;(void)p; if(r==DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(h); return TRUE; }\n' \
-        > /tmp/test_minimal.c && \
-    $CC -shared -static-libgcc -o /output/${WINE_VERSION}/test_minimal.dll /tmp/test_minimal.c \
-        -Wl,--image-base,0x10000000 && \
-    i686-w64-mingw32-strip /output/${WINE_VERSION}/test_minimal.dll 2>/dev/null && \
-    echo "  Built test_minimal.dll (diagnostic)" && \
     \
     # ── Cleanup ──
     cd / && rm -rf wine-${WINE_VERSION} wine9x
