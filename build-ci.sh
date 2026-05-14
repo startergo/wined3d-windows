@@ -166,9 +166,10 @@ download_wine() {
     if [ ! -f "$archive" ]; then
         echo "  Downloading Wine $version..."
         if command -v wget &>/dev/null; then
-            wget -q --show-progress -O "$archive" "$url"
-        else
-            curl -L --fail --retry 3 -o "$archive" "$url"
+            wget --tries=3 -O "$archive" "$url" || { rm -f "$archive"; return 1; }
+        fi
+        if [ ! -f "$archive" ]; then
+            curl -fSL -o "$archive" "$url" || { rm -f "$archive"; return 1; }
         fi
     fi
 
@@ -588,7 +589,7 @@ build_version() {
     echo "=== Building Wine $version ==="
 
     # Download and extract Wine source
-    download_wine "$version" "$branch" "$ext"
+    download_wine "$version" "$branch" "$ext" || return 1
     local wine_src="$SCRIPT_DIR/wine-${version}"
 
     # Setup build directory
