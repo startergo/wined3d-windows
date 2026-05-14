@@ -794,7 +794,7 @@ main() {
     # Build each version
     for entry in "${VERSIONS[@]}"; do
         IFS=: read WINE_VERSION WINE_BRANCH WINE_EXT <<< "$entry"
-        build_version "$WINE_VERSION" "$WINE_BRANCH" "$WINE_EXT" || true
+        build_version "$WINE_VERSION" "$WINE_BRANCH" "$WINE_EXT"
     done
 
     # Summary
