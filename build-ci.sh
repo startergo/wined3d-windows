@@ -160,8 +160,8 @@ download_wine() {
         return 0
     fi
 
-    local url="https://dl.winehq.org/wine/source/${branch}/wine-${version}.tar.${ext}"
-    local archive="$SCRIPT_DIR/wine-${version}.tar.${ext}"
+    local url="https://dl.winehq.org/wine/source/${branch}/wine-${version}.${ext}"
+    local archive="$SCRIPT_DIR/wine-${version}.${ext}"
 
     if [ ! -f "$archive" ]; then
         echo "  Downloading Wine $version..."
