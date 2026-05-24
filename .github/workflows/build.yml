@@ -1,0 +1,334 @@
+name: Build Wine D3D DLLs
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Space-separated Wine versions to build (leave empty for all)'
+        required: false
+        default: ''
+      force_rebuild:
+        description: 'Force rebuild even if artifacts exist'
+        type: boolean
+        default: false
+      create_release:
+        description: 'Create a GitHub Release with the bundled DLLs'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wine_version: "1.8.7"
+            wine_branch: "1.8"
+            wine_ext: "tar.bz2"
+            build_msvcrt: "0"
+          - wine_version: "1.9.7"
+            wine_branch: "1.9"
+            wine_ext: "tar.bz2"
+            build_msvcrt: "0"
+          - wine_version: "2.0.5"
+            wine_branch: "2.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "3.0.5"
+            wine_branch: "3.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "4.12.1"
+            wine_branch: "4.x"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "5.0.5"
+            wine_branch: "5.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "6.0.4"
+            wine_branch: "6.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "1"
+          - wine_version: "7.0.2"
+            wine_branch: "7.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+          - wine_version: "8.0.2"
+            wine_branch: "8.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
+
+    name: Wine ${{ matrix.wine_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSYS2 (MINGW32)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: false
+          install: >-
+            make
+            flex
+            bison
+            wget
+            git
+            diffutils
+            python
+
+      - name: Install pinned MinGW toolchain (GCC 14.2 + crt-git 12.0)
+        shell: msys2 {0}
+        run: |
+          # Install exact toolchain matching the reference qemu-3dfx build environment.
+          # Single pacman -U --nodeps call prevents dependency resolver from replacing
+          # our pinned versions with latest repo versions (e.g. gcc-libs 15 → 14.2).
+          # CRT-git 12.0 + GCC 14.2 produce DLLs compatible with Win98's msvcrt.dll.
+          BASE=https://repo.msys2.org/mingw/mingw32
+          pacman -U --noconfirm --overwrite '*' --nodeps \
+            ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-winpthreads-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-binutils-2.44-4-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gcc-libs-14.2.0-3-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gettext-runtime-0.26-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-libiconv-1.19-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-zlib-1.3.2-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-zstd-1.5.7-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-gmp-6.3.0-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-mpfr-4.2.2-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-mpc-1.3.1-2-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-isl-0.27-1-any.pkg.tar.zst
+          echo "=== Toolchain versions ==="
+          gcc --version | head -1
+          ld --version | head -1
+          pacman -Q mingw-w64-i686-crt-git mingw-w64-i686-headers-git mingw-w64-i686-gcc mingw-w64-i686-gcc-libs
+
+      - name: Cache Wine source and CRT
+        uses: actions/cache@v4
+        with:
+          path: src
+          key: wine-src-${{ matrix.wine_version }}-v29
+
+      - name: Build Wine ${{ matrix.wine_version }}
+        shell: msys2 {0}
+        run: |
+          bash build-ci.sh --force --versions ${{ matrix.wine_version }}
+
+      - name: Set build-timestamp executable
+        shell: bash
+        run: chmod +x output/${{ matrix.wine_version }}/build-timestamp
+
+      - name: Upload config.log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-log-${{ matrix.wine_version }}
+          path: src/wine-${{ matrix.wine_version }}/config.log
+          if-no-files-found: warn
+
+      - name: Verify dependencies
+        shell: msys2 {0}
+        run: |
+          fail=0
+          for dll in wined3d d3d9 d3d8 ddraw; do
+            path="output/${{ matrix.wine_version }}/${dll}.dll"
+            [ -f "$path" ] || continue
+            echo "=== ${dll}.dll imports ==="
+            objdump -p "$path" | grep "DLL Name"
+            if objdump -p "$path" | grep -q "ucrtbase"; then
+              echo "ERROR: ${dll}.dll links against ucrtbase.dll — must use msvcrt instead"
+              fail=1
+            fi
+            if objdump -p "$path" | grep -q "libwine.dll"; then
+              echo "ERROR: ${dll}.dll links against libwine.dll — should be static"
+              fail=1
+            fi
+            echo "OK"
+          done
+          exit $fail
+
+      - name: Upload DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dlls-${{ matrix.wine_version }}
+          path: output/${{ matrix.wine_version }}/
+          retention-days: 30
+          if-no-files-found: error
+
+  build-msvcrt:
+    runs-on: ubuntu-latest
+    name: Build msvcrt.dll (Wine 6.0.4)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-i686 gcc-multilib g++-multilib make flex bison wget
+
+      - name: Cache Wine source
+        uses: actions/cache@v4
+        with:
+          path: wine-src
+          key: msvcrt-wine-6.0.4-v1
+
+      - name: Download Wine 6.0.4 source
+        run: |
+          if [ ! -d wine-src/wine-6.0.4 ]; then
+            mkdir -p wine-src
+            wget -q -O /tmp/wine-6.0.4.tar.xz https://dl.winehq.org/wine/source/6.0/wine-6.0.4.tar.xz
+            tar xf /tmp/wine-6.0.4.tar.xz -C wine-src
+          fi
+
+      - name: Build msvcrt.dll
+        run: |
+          # Stage 1: build native Wine tools (winebuild, widl, wrc, wmc, winegcc)
+          mkdir -p /tmp/wine-tools && cd /tmp/wine-tools
+          "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/configure" \
+            --disable-win16 --disable-win64 --disable-tests \
+            --without-x --without-vulkan --without-alsa --without-capi \
+            --without-cups --without-dbus --without-fontconfig --without-freetype \
+            --without-gphoto --without-gnutls --without-inotify --without-krb5 \
+            --without-ldap --without-netapi --without-openal \
+            --without-opencl --without-opengl --without-osmesa --without-oss \
+            --without-pcap --without-pulse --without-sane --without-sdl \
+            --without-udev --without-unwind --without-usb --without-v4l2 \
+            2>&1 | tail -5
+          make -j$(nproc) depend 2>&1 | tail -5
+          make -j$(nproc) tools/winebuild/winebuild tools/widl/widl tools/wrc/wrc \
+            tools/wmc/wmc tools/sfnt2fon/sfnt2fon tools/winegcc/winegcc 2>&1 | tail -10
+
+          # Stage 2: cross-compile msvcrt.dll
+          mkdir -p /tmp/wine-cross && cd /tmp/wine-cross
+          "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/configure" \
+            --host=i686-w64-mingw32 \
+            --with-wine-tools=/tmp/wine-tools \
+            --with-mingw \
+            --disable-win16 --disable-win64 --disable-tests \
+            --without-x --without-vulkan --without-alsa --without-capi \
+            --without-cups --without-dbus --without-fontconfig --without-freetype \
+            --without-gphoto --without-gnutls --without-inotify --without-krb5 \
+            --without-ldap --without-netapi --without-openal \
+            --without-opencl --without-opengl --without-osmesa --without-oss \
+            --without-pcap --without-pulse --without-sane --without-sdl \
+            --without-udev --without-unwind --without-usb --without-v4l2 \
+            CC=i686-w64-mingw32-gcc \
+            2>&1 | tail -5
+
+          # Patch headers to prevent UCRT definitions
+          sed -i 's/^#if !defined(_UCRT) && _MSVCR_VER >= 140/#if 0/' \
+            "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/include/msvcrt/corecrt.h"
+          sed -i 's/^#ifdef _UCRT/#if 0/' \
+            "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/include/msvcrt/corecrt_wstring.h"
+          sed -i 's/^#if defined(_UCRT) && !defined(_NO_CRT_STDIO_INLINE)/#if 0/' \
+            "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/include/msvcrt/stdio.h"
+          sed -i 's/^#if defined(_UCRT) && !defined(_NO_CRT_STDIO_INLINE)/#if 0/' \
+            "$GITHUB_WORKSPACE/wine-src/wine-6.0.4/include/msvcrt/corecrt_wstdio.h"
+
+          mkdir -p "$GITHUB_WORKSPACE/output/6.0.4"
+          make -j$(nproc) dlls/msvcrt/msvcrt.dll CFLAGS+="-U_UCRT" 2>&1 | tail -20
+          cp dlls/msvcrt/msvcrt.dll "$GITHUB_WORKSPACE/output/6.0.4/msvcrt.dll"
+          echo "Built msvcrt.dll from Wine source"
+          ls -la "$GITHUB_WORKSPACE/output/6.0.4/msvcrt.dll"
+
+      - name: Upload msvcrt.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: msvcrt-dll
+          path: output/6.0.4/msvcrt.dll
+          retention-days: 30
+
+  bundle:
+    runs-on: ubuntu-latest
+    needs: [build, build-msvcrt]
+    name: Bundle all DLLs
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+          pattern: wine-dlls-*
+
+      - name: Download msvcrt.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: msvcrt-dll
+          path: staging/msvcrt-dll
+        continue-on-error: true
+
+      - name: Restructure into wine/ directory
+        run: |
+          mkdir -p wine
+          for dir in staging/wine-dlls-*; do
+            [ -d "$dir" ] || continue
+            version="${dir##*/wine-dlls-}"
+            mv "$dir" "wine/$version"
+          done
+          # Merge msvcrt.dll into Wine 6.0.4 output
+          if [ -f staging/msvcrt-dll/msvcrt.dll ]; then
+            mkdir -p wine/6.0.4
+            cp staging/msvcrt-dll/msvcrt.dll wine/6.0.4/msvcrt.dll
+            echo "Added msvcrt.dll to Wine 6.0.4 bundle"
+          fi
+
+      - name: Set build-timestamps executable
+        run: find wine -name build-timestamp -exec chmod +x {} +
+
+      - name: Upload bundled archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dlls-all
+          path: wine
+          retention-days: 30
+
+  release:
+    runs-on: ubuntu-latest
+    needs: bundle
+    name: Create Release
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download bundled artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-dlls-all
+          path: wine
+
+      - name: Create archive
+        run: tar -czf wine-d3d-dlls.tar.gz wine
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$(date '+%Y.%m.%d')"
+          TITLE="Wine D3D DLLs $(date '+%Y-%m-%d')"
+          gh release create "$TAG" wine-d3d-dlls.tar.gz \
+            --title "$TITLE" \
+            --notes "Wine D3D DLLs built from source for all supported versions (1.8.7–8.0.2).
+
+          Includes: wined3d.dll, d3d9.dll, d3d8.dll, ddraw.dll per version.
+          Wine 6.0.4 also includes msvcrt.dll.
+          All DLLs link against msvcrt.dll (no ucrtbase.dll dependency)."

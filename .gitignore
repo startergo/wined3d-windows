@@ -1,0 +1,23 @@
+qemu-3dx-hooks.md
+.vscode/
+wine-legacy/
+.DS_Store
+tmpbuild/
+
+# Wine source trees (symlinks or extracted)
+wine-1.*/**
+wine-2.*/**
+wine-3.*/**
+wine-4.*/**
+wine-5.*/**
+wine-6.*/**
+wine-7.*/**
+wine-8.*/**
+
+# Test binaries
+tests/run_test_hooks
+tests/run_test_ddraw_stubs
+tests/run_test_passthrough
+output/
+reference_dll_analysis.txt
+reference_analysis.md
