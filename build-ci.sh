@@ -744,6 +744,10 @@ build_version() {
         sed -i 's/\bDEVMODEW\b/DEVMODEA/g' "$_dx"
     fi
 
+    # W→A string/event API patches (Win98 has no lstrcmpiW/lstrcpyW/CreateEventW)
+    find "$wine_src/dlls/wined3d" -name "*.c" -exec sed -i \
+        's/\blstrcmpiW\b/lstrcmpiA/g; s/\blstrcpyW\b/lstrcpyA/g; s/\bCreateEventW\b/CreateEventA/g' {} +
+
     # ── RtlIsCriticalSectionLockedByThread redirect (3.0.5+) ──
     if [ -f "$wine_src/dlls/wined3d/cs.c" ]; then
         sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/1/' "$wine_src/dlls/wined3d/cs.c"

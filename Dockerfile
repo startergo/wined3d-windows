@@ -217,6 +217,8 @@ RUN set -ex && \
     sed -i 's/EnumDisplaySettingsW/EnumDisplaySettingsA/g' /build/wined3d/directx.c && \
     sed -i 's/\bDEVMODEW\b/DEVMODEA/g' /build/wined3d/directx.c && \
     \
+    true "=== Win9x: W→A string/event API patches ===" && \
+    find /build/wined3d -name "*.c" -exec sed -i 's/\blstrcmpiW\b/lstrcmpiA/g; s/\blstrcpyW\b/lstrcpyA/g; s/\bCreateEventW\b/CreateEventA/g' {} + && \
     true "=== Fix DEVMODEA anonymous union access — MinGW uses __C89_NAMELESS (direct members) ===" && \
     sed -i 's/\.u2\.dmDisplayFlags/.dmDisplayFlags/g; s/->u2\.dmDisplayFlags/->dmDisplayFlags/g' /build/wined3d/directx.c && \
     sed -i 's/\.u1\.s2\././g; s/->u1\.s2\./->/g' /build/wined3d/directx.c && \
