@@ -134,3 +134,8 @@ long WINAPI D3DParseUnknownCommand(void *lpCmd, void **lpRetCmd)
     if (lpRetCmd) *lpRetCmd = lpCmd;
     return 0x8876086A; /* D3DERR_COMMAND_UNPARSED */
 }
+
+/* COM exports removed from Wine 7.0+ ddraw */
+HRESULT WINAPI DllCanUnloadNow(void) { return 1; }
+HRESULT WINAPI DllRegisterServer(void) { return 0; }
+HRESULT WINAPI DllUnregisterServer(void) { return 0; }
