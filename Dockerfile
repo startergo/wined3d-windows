@@ -276,6 +276,7 @@ RUN set -ex && \
     echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
     [ -f wined3d/adapter_gl.c ] && echo "wined3d_OBJS += wined3d/adapter_gl.c.o" >> Makefile || true && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
+    echo "wined3d_OBJS += wined3d/d3dkmt_stubs.c.o" >> Makefile && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
     echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_passthrough.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o" >> Makefile && \
     echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
@@ -302,9 +303,11 @@ RUN set -ex && \
     cp /docker/qemu3dfx_hooks.c wined3d/qemu3dfx_hooks.c && \
     cp /docker/qemu3dfx_ddraw_hooks.c ddraw/qemu3dfx_ddraw_hooks.c && \
     cp /docker/qemu3dfx_ddraw_passthrough.c ddraw/qemu3dfx_ddraw_passthrough.c && \
+    cp /docker/d3dkmt_stubs.c wined3d/d3dkmt_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/qemu3dfx_hooks.c.o wined3d/qemu3dfx_hooks.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -Iwined3d -c -o ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_hooks.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -Iwined3d -Iddraw -c -o ddraw/qemu3dfx_ddraw_passthrough.c.o ddraw/qemu3dfx_ddraw_passthrough.c && \
+    i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/d3dkmt_stubs.c.o wined3d/d3dkmt_stubs.c && \
     \
     echo "=== Patch ddraw source for qemu-3dfx ===" && \
     sed -i '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_passthrough_init(void);\
