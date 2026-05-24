@@ -256,7 +256,8 @@ RUN set -ex && \
     echo "EXPORTS" > /build/wined3d/wined3d.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
-        grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore|vkd3d_' >> /build/wined3d/wined3d.def && \
+        grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore' >> /build/wined3d/wined3d.def && \
+    printf '  wined3d_surface_ddheap\n' >> /build/wined3d/wined3d.def && \
     echo "EXPORTS" > /build/ddraw/ddraw.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/ddraw/ddraw.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
@@ -268,16 +269,17 @@ RUN set -ex && \
     echo "EXPORTS" > /build/d3d9/d3d9.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/d3d9/d3d9.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' >> /build/d3d9/d3d9.def && \
+    printf '  DebugSetLevel\n  PSGPError\n  PSGPSampleTexture\n' >> /build/d3d9/d3d9.def && \
     \
     echo "=== Inject qemu-3dfx + compat objects into Makefile ===" && \
-    echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
+    echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
     [ -f wined3d/adapter_gl.c ] && echo "wined3d_OBJS += wined3d/adapter_gl.c.o" >> Makefile || true && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
     echo "wined3d_OBJS += wined3d/d3dkmt_stubs.c.o" >> Makefile && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
     echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_passthrough.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o" >> Makefile && \
     echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
-    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
+    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
     \
     echo "=== Add qemu-3dfx exports to wined3d.def ===" && \
     echo "  wined3d_hal_3dfx" >> wined3d/wined3d.def && \
@@ -295,6 +297,7 @@ RUN set -ex && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/copysign.o /docker/copysign.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/libwine_stubs.o /docker/libwine_stubs.c && \
+    i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/wine_spec_stubs.o /docker/wine_spec_stubs.c && \
     \
     echo "=== Copy and pre-compile qemu-3dfx hooks ===" && \
     cp /docker/qemu3dfx_hooks.c wined3d/qemu3dfx_hooks.c && \

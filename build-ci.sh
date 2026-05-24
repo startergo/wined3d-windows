@@ -229,9 +229,9 @@ generate_def() {
         sed -E 's/^\s*@\s+(stdcall|cdecl)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
         grep -v '^$' >> "$def_file"
 
-    # Filter vkd3d_ prefixed exports from wined3d
+    # wined3d: no special filtering (vkd3d stubs are in wine_spec_stubs.c)
     if [ "$dll_name" = "wined3d" ]; then
-        sed -i '/^vkd3d_/d' "$def_file"
+        true
     fi
 
     # Add wine9x custom exports for wined3d
@@ -239,7 +239,8 @@ generate_def() {
         for sym in wined3d_hal_3dfx wined3d_enum_hal_last \
                    wined3d_passthru wined3d_override_cooplevel \
                    wined3d_override_rendertarget_view \
-                   wined3d_blit_fpslimit wined3d_flip_fpslimit; do
+                   wined3d_blit_fpslimit wined3d_flip_fpslimit \
+                   wined3d_surface_ddheap; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
         for sym in malloc free realloc calloc strdup _strdup _expand _msize \
@@ -262,6 +263,13 @@ generate_def() {
                    VidMemInit VidMemLargestFree \
                    DllCanUnloadNow DllGetClassObject \
                    DllRegisterServer DllUnregisterServer; do
+            grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
+        done
+    fi
+
+    # d3d9: add stub exports (@ stub in Wine spec, no implementation)
+    if [ "$dll_name" = "d3d9" ]; then
+        for sym in DebugSetLevel PSGPError PSGPSampleTexture; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
     fi
@@ -593,12 +601,9 @@ compile_compat() {
     echo "  CC libwine_stubs.c"
     $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_libwine_stubs.o" "$SCRIPT_DIR/docker/libwine_stubs.c" 2>/dev/null || true
 
-    # Compile vkd3d stubs (Wine 8.0.2+ exports vkd3d functions)
-    local vkd3d_stubs="$(dirname "$obj_dir")/vkd3d_stubs.c"
-    if [ -f "$vkd3d_stubs" ]; then
-        echo "  CC vkd3d_stubs.c"
-        $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_vkd3d_stubs.o" "$vkd3d_stubs" 2>/dev/null || true
-    fi
+    # Compile Wine spec stubs (d3d9 @ stub exports, streaming_buffer, vkd3d)
+    echo "  CC wine_spec_stubs.c"
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_wine_spec_stubs.o" "$SCRIPT_DIR/docker/wine_spec_stubs.c" 2>/dev/null || true
 }
 
 # ── Link wined3d.dll ───────────────────────────────────────────────
@@ -791,15 +796,6 @@ build_version() {
             generate_def "$spec" "$build_dir/$dll_name.def" "$dll_name"
         fi
     done
-
-    # ── Generate vkd3d stubs (Wine 8.0.2+ exports vkd3d functions) ──
-    local wined3d_spec="$wine_src/dlls/wined3d/wined3d.spec"
-    if [ -f "$wined3d_spec" ] && grep -q 'vkd3d' "$wined3d_spec" 2>/dev/null; then
-        grep -E '^\s*@\s+(stdcall|cdecl)\s+vkd3d' "$wined3d_spec" | \
-            sed -E 's/^\s*@\s+(stdcall|cdecl)\s+([A-Za-z_][A-Za-z0-9_]*).*/int \2() { return 0; }/' \
-            > "$build_dir/vkd3d_stubs.c"
-        echo "  Generated vkd3d stubs ($(grep -c 'return 0' "$build_dir/vkd3d_stubs.c") functions)"
-    fi
 
     # ── Compile wined3d ──
     echo "--- wined3d ---"

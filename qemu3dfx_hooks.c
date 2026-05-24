@@ -177,6 +177,13 @@ BOOL WINAPI wined3d_flip_fpslimit(void)
     return TRUE;
 }
 
+/* ── DDHeap surface accessor (returns TRUE when HAL passthrough is active) ── */
+
+BOOL WINAPI wined3d_surface_ddheap(void)
+{
+    return hal_3dfx_result != 0;
+}
+
 /* ── Registry config keys ─────────────────────────────────────────── */
 
 const char qemu3dfx_hal_key[] = "D3D1Hal3Dfx";
