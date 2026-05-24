@@ -341,7 +341,11 @@ extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/
     true "=== Pre-compile Wine 6.0+ GL source files via make pattern rule ===" && \
     [ -f wined3d/adapter_gl.c ] && make wined3d/adapter_gl.c.o || true && \
     [ -f wined3d/context_gl.c ] && make wined3d/context_gl.c.o || true && \
-    true "=== Build all DLLs with standard CRT (matching reference) ===" && \
+    true "=== Link ddraw/d3d8/d3d9 with nocrt (no CRT startup, only math from msvcrt) ===" && \
+    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$ddraw_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$ddraw_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
+    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$d3d8_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$d3d8_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
+    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$d3d9_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$d3d9_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
+    true "=== Build all DLLs ===" && \
     make wined3d.dll winedd.dll wined8.dll wined9.dll && \
     \
     true "=== Build msvcrt.dll from Wine source (BUILD_MSVCRT=1 only) ===" && \

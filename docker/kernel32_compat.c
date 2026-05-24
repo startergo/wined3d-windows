@@ -114,6 +114,12 @@ void __stdcall FreeLibraryAndExitThread(void *hModule, unsigned long dwExitCode)
     for (;;);
 }
 
+/* --- SetThreadDescription (Win10+, not on Win98) --- */
+void *__stdcall GetCurrentThread(void);
+void __stdcall SetThreadDescription(void *hThread, const WCHAR *lpThreadDescription)
+{
+}
+
 /* --- __imp__ pointers --- */
 __asm__("\n"
     ".globl __imp__HeapCreate@12\n"
@@ -137,6 +143,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__FreeLibraryAndExitThread@8:\n"
     "    .long _FreeLibraryAndExitThread@8\n"
+    ".globl __imp__SetThreadDescription@8\n"
+    ".align 4\n"
+    "__imp__SetThreadDescription@8:\n"
+    "    .long _SetThreadDescription@8\n"
     ".text\n"
 );
 

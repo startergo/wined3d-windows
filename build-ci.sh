@@ -623,7 +623,7 @@ link_d3d() {
     local wined3d_dir="$5"
 
     echo "  LD $dll_name.dll"
-    $CC -shared -nostartfiles -static-libgcc \
+    $CC -shared -nostdlib -nodefaultlibs -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
@@ -631,7 +631,7 @@ link_d3d() {
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
         -L"$wined3d_dir" -lwined3d \
-        -lmsvcrt -lkernel32 -lgdi32 \
+        -lmsvcrt -lkernel32 -lgdi32 -lgcc \
         -Wl,--allow-multiple-definition \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
@@ -646,7 +646,7 @@ link_ddraw() {
     local wined3d_dir="$4"
 
     echo "  LD ddraw.dll"
-    $CC -shared -nostartfiles -static-libgcc \
+    $CC -shared -nostdlib -nodefaultlibs -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
@@ -654,7 +654,7 @@ link_ddraw() {
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
         -L"$wined3d_dir" -lwined3d \
-        -lmsvcrt -lkernel32 -luser32 -lgdi32 -ladvapi32 \
+        -lmsvcrt -lkernel32 -luser32 -lgdi32 -ladvapi32 -lgcc \
         -Wl,--allow-multiple-definition \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
