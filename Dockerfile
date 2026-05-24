@@ -252,27 +252,22 @@ RUN set -ex && \
     true "=== Add WGL constants via wglext.h to all wined3d source files ===" && \
     find /build/wined3d -name '*.c' -exec grep -l 'wined3d_private\.h' {} \; | xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true && \
     \
-    true "=== Generate .def from Wine spec (include @ stub exports for HAL stubs) ===" && \
+    true "=== Generate .def from Wine spec (add HAL stubs and COM exports for ddraw) ===" && \
     echo "EXPORTS" > /build/wined3d/wined3d.def && \
-    grep -E '^@ (stdcall|cdecl|stub)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
-        sed 's/^@ \(stdcall\|cdecl\|stub\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' | \
+    grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
+        sed 's/^@ \(stdcall\|cdecl\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' | \
         grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore|vkd3d_' >> /build/wined3d/wined3d.def && \
     echo "EXPORTS" > /build/ddraw/ddraw.def && \
-    grep -E '^@ (stdcall|cdecl|stub)' /tmp/wine-${WINE_VERSION}/dlls/ddraw/ddraw.spec 2>/dev/null | \
-        sed 's/^@ \(stdcall\|cdecl\|stub\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' | \
+    grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/ddraw/ddraw.spec 2>/dev/null | \
+        sed 's/^@ \(stdcall\|cdecl\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' | \
         grep -v '^$' >> /build/ddraw/ddraw.def && \
-    grep -q "  AcquireDDThreadLock" /build/ddraw/ddraw.def || echo "  AcquireDDThreadLock" >> /build/ddraw/ddraw.def && \
-    grep -q "  ReleaseDDThreadLock" /build/ddraw/ddraw.def || echo "  ReleaseDDThreadLock" >> /build/ddraw/ddraw.def && \
-    grep -q "  D3DParseUnknownCommand" /build/ddraw/ddraw.def || echo "  D3DParseUnknownCommand" >> /build/ddraw/ddraw.def && \
-    grep -q "  DDInternalLock" /build/ddraw/ddraw.def || echo "  DDInternalLock" >> /build/ddraw/ddraw.def && \
-    grep -q "  DDInternalUnlock" /build/ddraw/ddraw.def || echo "  DDInternalUnlock" >> /build/ddraw/ddraw.def && \
-    grep -q "  CompleteCreateSysmemSurface" /build/ddraw/ddraw.def || echo "  CompleteCreateSysmemSurface" >> /build/ddraw/ddraw.def && \
+    printf '  AcquireDDThreadLock\n  ReleaseDDThreadLock\n  D3DParseUnknownCommand\n  DDInternalLock\n  DDInternalUnlock\n  CompleteCreateSysmemSurface\n  DDHAL32_VidMemAlloc\n  DDHAL32_VidMemFree\n  DSoundHelp\n  GetNextMipMap\n  HeapVidMemAllocAligned\n  InternalLock\n  InternalUnlock\n  LateAllocateSurfaceMem\n  VidMemAlloc\n  VidMemAmountFree\n  VidMemFini\n  VidMemFree\n  VidMemInit\n  VidMemLargestFree\n  DllCanUnloadNow\n  DllGetClassObject\n  DllRegisterServer\n  DllUnregisterServer\n' >> /build/ddraw/ddraw.def && \
     echo "EXPORTS" > /build/d3d8/d3d8.def && \
-    grep -E '^@ (stdcall|cdecl|stub)' /tmp/wine-${WINE_VERSION}/dlls/d3d8/d3d8.spec 2>/dev/null | \
-        sed 's/^@ \(stdcall\|cdecl\|stub\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' >> /build/d3d8/d3d8.def && \
+    grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/d3d8/d3d8.spec 2>/dev/null | \
+        sed 's/^@ \(stdcall\|cdecl\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' >> /build/d3d8/d3d8.def && \
     echo "EXPORTS" > /build/d3d9/d3d9.def && \
-    grep -E '^@ (stdcall|cdecl|stub)' /tmp/wine-${WINE_VERSION}/dlls/d3d9/d3d9.spec 2>/dev/null | \
-        sed 's/^@ \(stdcall\|cdecl\|stub\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' >> /build/d3d9/d3d9.def && \
+    grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/d3d9/d3d9.spec 2>/dev/null | \
+        sed 's/^@ \(stdcall\|cdecl\)\( -private\)\? \([a-zA-Z0-9_]*\).*/  \3/' >> /build/d3d9/d3d9.def && \
     \
     echo "=== Inject qemu-3dfx + compat objects into Makefile ===" && \
     echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o" >> Makefile && \

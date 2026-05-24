@@ -221,12 +221,12 @@ generate_def() {
 
     echo "EXPORTS" > "$def_file"
 
-    # Parse Wine .spec: @ stdcall/cdecl/stub func_name(params)
-    # Extract function names from @ stdcall, @ cdecl, and @ stub entries.
-    # Exclude -private entries (internal CRT helpers).
-    grep -E '^\s*@\s+(stdcall|cdecl|stub)' "$spec_file" | \
+    # Parse Wine .spec: @ stdcall/cdecl func_name(params)
+    # Note: @ stub entries are NOT parsed — many are unimplemented COM methods.
+    # HAL stubs and custom exports are added explicitly below.
+    grep -E '^\s*@\s+(stdcall|cdecl)' "$spec_file" | \
         grep -v '\-private' | \
-        sed -E 's/^\s*@\s+(stdcall|cdecl|stub)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
+        sed -E 's/^\s*@\s+(stdcall|cdecl)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
         grep -v '^$' >> "$def_file"
 
     # Filter vkd3d_ prefixed exports from wined3d
@@ -236,14 +236,12 @@ generate_def() {
 
     # Add wine9x custom exports for wined3d
     if [ "$dll_name" = "wined3d" ]; then
-        # qemu-3dfx custom exports
         for sym in wined3d_hal_3dfx wined3d_enum_hal_last \
                    wined3d_passthru wined3d_override_cooplevel \
                    wined3d_override_rendertarget_view \
                    wined3d_blit_fpslimit wined3d_flip_fpslimit; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
-        # CRT exports (as in wine9x's wined3d.def)
         for sym in malloc free realloc calloc strdup _strdup _expand _msize \
                    _msize_int strtoull strtoll \
                    crt_locks_init crt_sse2_is_safe crt_enable_sse2; do
@@ -251,11 +249,19 @@ generate_def() {
         done
     fi
 
-    # ddraw: ensure qemu-3dfx custom exports present (may not be in older spec files)
+    # ddraw: add HAL stubs (from qemu3dfx_ddraw_hooks.c) and COM exports
+    # (from Wine main.c, filtered as -private above)
     if [ "$dll_name" = "ddraw" ]; then
         for sym in AcquireDDThreadLock ReleaseDDThreadLock \
                    D3DParseUnknownCommand DDInternalLock DDInternalUnlock \
-                   CompleteCreateSysmemSurface; do
+                   CompleteCreateSysmemSurface \
+                   DDHAL32_VidMemAlloc DDHAL32_VidMemFree \
+                   DSoundHelp GetNextMipMap HeapVidMemAllocAligned \
+                   InternalLock InternalUnlock LateAllocateSurfaceMem \
+                   VidMemAlloc VidMemAmountFree VidMemFini VidMemFree \
+                   VidMemInit VidMemLargestFree \
+                   DllCanUnloadNow DllGetClassObject \
+                   DllRegisterServer DllUnregisterServer; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
     fi
