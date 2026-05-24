@@ -221,13 +221,13 @@ generate_def() {
 
     echo "EXPORTS" > "$def_file"
 
-    # Parse Wine .spec: @ stdcall func_name(params) or @ cdecl func_name(params)
-    # Also handle: @ stdcall -private func_name(params)
-    grep -E '^\s*@\s+(stdcall|cdecl)' "$spec_file" | \
+    # Parse Wine .spec: @ stdcall/cdecl/stub func_name(params)
+    # Extract function names from @ stdcall, @ cdecl, and @ stub entries.
+    # Exclude -private entries (internal CRT helpers).
+    grep -E '^\s*@\s+(stdcall|cdecl|stub)' "$spec_file" | \
         grep -v '\-private' | \
-        sed -E 's/^\s*@\s+(stdcall|cdecl)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
-        grep -v '^$' | \
-        grep -v -E 'DllCanUnloadNow|DllRegisterServer|DllUnregisterServer|DllGetClassObject' >> "$def_file"
+        sed -E 's/^\s*@\s+(stdcall|cdecl|stub)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
+        grep -v '^$' >> "$def_file"
 
     # Filter vkd3d_ prefixed exports from wined3d
     if [ "$dll_name" = "wined3d" ]; then
@@ -251,7 +251,7 @@ generate_def() {
         done
     fi
 
-    # ddraw: add qemu-3dfx custom exports (not in spec)
+    # ddraw: ensure qemu-3dfx custom exports present (may not be in older spec files)
     if [ "$dll_name" = "ddraw" ]; then
         for sym in AcquireDDThreadLock ReleaseDDThreadLock \
                    D3DParseUnknownCommand DDInternalLock DDInternalUnlock \
