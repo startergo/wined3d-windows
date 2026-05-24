@@ -83,6 +83,27 @@ void *__stdcall HeapCreate(unsigned long flOptions, unsigned long dwInitialSize,
     return GetProcessHeap();
 }
 
+/* --- GlobalMemoryStatusEx (Win2k+, not on Win98) --- */
+typedef struct { DWORD dwLength; DWORD dwMemoryLoad; unsigned __LONG32 ullTotalPhys; unsigned __LONG32 ullAvailPhys; unsigned __LONG32 ullTotalPageFile; unsigned __LONG32 ullAvailPageFile; unsigned __LONG32 ullTotalVirtual; unsigned __LONG32 ullAvailVirtual; unsigned __LONG32 ullAvailExtendedVirtual; } MEMORYSTATUSEX;
+BOOL __stdcall GlobalMemoryStatusEx(MEMORYSTATUSEX *lpBuffer)
+{
+    typedef struct { DWORD dwLength; DWORD dwMemoryLoad; unsigned __LONG32 dwTotalPhys; unsigned __LONG32 dwAvailPhys; unsigned __LONG32 dwTotalPageFile; unsigned __LONG32 dwAvailPageFile; unsigned __LONG32 dwTotalVirtual; unsigned __LONG32 dwAvailVirtual; } MEMORYSTATUS;
+    void __stdcall GlobalMemoryStatus(MEMORYSTATUS *);
+    MEMORYSTATUS ms;
+    if (!lpBuffer || lpBuffer->dwLength < sizeof(MEMORYSTATUSEX)) return 0;
+    ms.dwLength = sizeof(MEMORYSTATUS);
+    GlobalMemoryStatus(&ms);
+    lpBuffer->dwMemoryLoad = ms.dwMemoryLoad;
+    lpBuffer->ullTotalPhys = ms.dwTotalPhys;
+    lpBuffer->ullAvailPhys = ms.dwAvailPhys;
+    lpBuffer->ullTotalPageFile = ms.dwTotalPageFile;
+    lpBuffer->ullAvailPageFile = ms.dwAvailPageFile;
+    lpBuffer->ullTotalVirtual = ms.dwTotalVirtual;
+    lpBuffer->ullAvailVirtual = ms.dwAvailVirtual;
+    lpBuffer->ullAvailExtendedVirtual = 0;
+    return 1;
+}
+
 /* --- __imp__ pointers --- */
 __asm__("\n"
     ".globl __imp__HeapCreate@12\n"
@@ -98,6 +119,10 @@ __asm__("\n"
     ".align 4\n"
     "__imp__GetModuleHandleExW@12:\n"
     "    .long _GetModuleHandleExW@12\n"
+    ".globl __imp__GlobalMemoryStatusEx@4\n"
+    ".align 4\n"
+    "__imp__GlobalMemoryStatusEx@4:\n"
+    "    .long _GlobalMemoryStatusEx@4\n"
     ".text\n"
 );
 
