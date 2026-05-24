@@ -98,15 +98,19 @@ opengl32.dll (qemu-3dfx wrapper) → mesapt → Host GPU
 ### Docker (recommended)
 
 ```bash
+# Clone with submodules (or init after clone)
+git clone --recurse-submodules https://github.com/startergo/wined3d-windows.git
+# If already cloned:
+git submodule update --init --recursive
+
 # Build Wine 1.8.7
-docker build --build-arg WINE_VERSION=1.8.7 \
-             --build-arg WINE_BRANCH=1.8 \
-             -t wined3d-1.8.7 .
+bash build-docker.sh --version 1.8.7
 
 # Build Wine 6.0.4
-docker build --build-arg WINE_VERSION=6.0.4 \
-             --build-arg WINE_BRANCH=6.0 \
-             -t wined3d-6.0.4 .
+bash build-docker.sh --version 6.0.4
+
+# Or use docker build directly:
+bash build-docker.sh --progress=plain
 ```
 
 Extract output DLLs from the image:

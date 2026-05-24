@@ -5,14 +5,7 @@ wine-legacy/
 tmpbuild/
 
 # Wine source trees (symlinks or extracted)
-wine-1.*/**
-wine-2.*/**
-wine-3.*/**
-wine-4.*/**
-wine-5.*/**
-wine-6.*/**
-wine-7.*/**
-wine-8.*/**
+wine-*.*
 
 # Test binaries
 tests/run_test_hooks
