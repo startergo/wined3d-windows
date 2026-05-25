@@ -240,7 +240,10 @@ generate_def() {
                    wined3d_passthru wined3d_override_cooplevel \
                    wined3d_override_rendertarget_view \
                    wined3d_blit_fpslimit wined3d_flip_fpslimit \
-                   wined3d_surface_ddheap; do
+                   wined3d_surface_ddheap \
+                   wined3d_streaming_buffer_map \
+                   wined3d_streaming_buffer_unmap \
+                   wined3d_streaming_buffer_upload; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
         for sym in malloc free realloc calloc strdup _strdup _expand _msize \

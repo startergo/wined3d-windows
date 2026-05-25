@@ -257,7 +257,7 @@ RUN set -ex && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
         grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore' >> /build/wined3d/wined3d.def && \
-    printf '  wined3d_surface_ddheap\n' >> /build/wined3d/wined3d.def && \
+    printf '  wined3d_surface_ddheap\n  wined3d_streaming_buffer_map\n  wined3d_streaming_buffer_unmap\n  wined3d_streaming_buffer_upload\n' >> /build/wined3d/wined3d.def && \
     echo "EXPORTS" > /build/ddraw/ddraw.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/ddraw/ddraw.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
