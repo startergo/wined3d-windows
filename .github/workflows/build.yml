@@ -145,34 +145,7 @@ jobs:
 
       - name: Verify dependencies
         shell: msys2 {0}
-        run: |
-          python -m pip install pefile >/dev/null 2>&1
-          python -c "
-          import pefile, sys, glob
-          fail = False
-          for path in sorted(glob.glob('output/${{ matrix.wine_version }}/*.dll')):
-              name = path.split('/')[-1]
-              try:
-                  pe = pefile.PE(path)
-              except Exception as e:
-                  print(f'ERROR: {name}: cannot parse PE: {e}')
-                  fail = True
-                  continue
-              imports = []
-              if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
-                  for entry in pe.DIRECTORY_ENTRY_IMPORT:
-                      dll = entry.dll.decode().lower()
-                      imports.append(dll)
-                      if dll == 'ucrtbase.dll':
-                          print(f'ERROR: {name} links against ucrtbase.dll — must use msvcrt instead')
-                          fail = True
-                      if dll == 'libwine.dll':
-                          print(f'ERROR: {name} links against libwine.dll — should be static')
-                          fail = True
-              print(f'=== {name} imports: {\" \".join(imports)}')
-              print('OK')
-          sys.exit(1 if fail else 0)
-          "
+        run: python docker/verify_imports.py ${{ matrix.wine_version }}
 
       - name: Upload DLLs
         uses: actions/upload-artifact@v4
