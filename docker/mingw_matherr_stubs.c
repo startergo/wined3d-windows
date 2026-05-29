@@ -20,30 +20,31 @@ void __mingw_raise_matherr(int type, const char *name,
     (void)type; (void)name; (void)arg1; (void)arg2; (void)retval;
 }
 
-/* _vsnprintf / _vscprintf — provided by msvcrt.dll at runtime on Win98.
- * These stubs satisfy the linker; the real msvcrt.dll exports take over
- * at load time via the import table. */
+/* _vsnprintf / _vscprintf — stubs that return a safe default.
+ * The real implementations come from either heap_compat.c or msvcrt.dll at runtime. */
 int _vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
 {
-    /* Forward to the compiler's vsnprintf — only used if msvcrt import fails */
-    extern int vsnprintf(char *, unsigned int, const char *, va_list);
-    return vsnprintf(buf, size, fmt, ap);
+    (void)buf; (void)size; (void)fmt; (void)ap;
+    return 0;
 }
 
 int _vscprintf(const char *fmt, va_list ap)
 {
-    return _vsnprintf(0, 0, fmt, ap);
+    (void)fmt; (void)ap;
+    return 0;
 }
 
-/* __logl_internal — called by MinGW's log() wrapper in libmsvcrt.a */
+/* __logl_internal — called by MinGW's log() wrapper in libmsvcrt.a.
+ * Uses x87 FPU directly to avoid depending on msvcrt's log(). */
 double __logl_internal(double x)
 {
-    extern double log(double);
-    return log(x);
+    __asm__("fldln2; fxch; fyl2x" : "+t"(x));
+    return x;
 }
 
 /* __ms_vsnprintf — alias used by MinGW's vsnprintf wrapper in libmsvcrt.a */
 int __ms_vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
 {
-    return _vsnprintf(buf, size, fmt, ap);
+    (void)buf; (void)size; (void)fmt; (void)ap;
+    return 0;
 }
