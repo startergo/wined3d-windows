@@ -146,8 +146,8 @@ jobs:
       - name: Verify dependencies
         shell: msys2 {0}
         run: |
-          pip install pefile >/dev/null 2>&1
-          python3 -c "
+          python -m pip install pefile >/dev/null 2>&1
+          python -c "
           import pefile, sys, glob
           fail = False
           for path in sorted(glob.glob('output/${{ matrix.wine_version }}/*.dll')):
