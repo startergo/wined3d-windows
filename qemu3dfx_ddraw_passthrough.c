@@ -30,6 +30,7 @@ extern void WINAPI wined3d_override_cooplevel(DWORD *cooplevel);
 extern void WINAPI wined3d_override_rendertarget_view(void *view_ptr);
 extern BOOL WINAPI wined3d_blit_fpslimit(void);
 extern BOOL WINAPI wined3d_flip_fpslimit(void);
+extern BOOL WINAPI wined3d_surface_ddheap(void);
 
 /* ── ddrawwq.dll function table ────────────────────────────────────── */
 
@@ -166,8 +167,12 @@ void qemu3dfx_ddraw_blit(void)
 
 void qemu3dfx_ddraw_flip(void)
 {
-    if (g_passthru_active)
-        wined3d_flip_fpslimit();
+    if (!g_passthru_active) return;
+#ifdef DDRAW_FLIP_CALL_SURFACE_DDHEAP
+    wined3d_surface_ddheap();
+#elif defined(DDRAW_FLIP_CALL_FPSLIMIT)
+    wined3d_flip_fpslimit();
+#endif
 }
 
 /* ── Render target view passthrough override ───────────────────────── */

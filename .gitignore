@@ -14,3 +14,4 @@ tests/run_test_passthrough
 output/
 reference_dll_analysis.txt
 reference_analysis.md
+agents/

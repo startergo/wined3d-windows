@@ -24,8 +24,30 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
             print(f'  Set NO_SEH flag: DllChars={hex(dll_chars)} ({os.path.basename(dll)})')
 
         sec_off = opt + opt_size
+
+        # Resolve COFF string table for long section names stored as /N
+        sym_ptr = struct.unpack_from('<I', data, coff + 8)[0]
+        sym_count = struct.unpack_from('<I', data, coff + 12)[0]
+        strtab = b''
+        if sym_ptr > 0 and sym_count > 0:
+            strtab_off = sym_ptr + sym_count * 18
+            if strtab_off + 4 <= len(data):
+                strtab_sz = struct.unpack_from('<I', data, strtab_off)[0]
+                strtab = data[strtab_off:strtab_off + strtab_sz]
+
+        def resolve_sec_name(idx):
+            raw = data[sec_off + idx * 40:sec_off + idx * 40 + 8]
+            name = raw.split(b'\x00')[0]
+            if name.startswith(b'/') and len(strtab) > 4:
+                offset = int(name[1:])
+                if 0 < offset < len(strtab):
+                    end = strtab.index(b'\x00', offset) if b'\x00' in strtab[offset:] else len(strtab)
+                    return strtab[offset:end]
+            return name
+
+        # Only strip .debug_* sections, NOT .eh_frame (needed for exception handling)
         strip = [i for i in range(nsec)
-                 if data[sec_off+i*40:sec_off+i*40+8].split(b'\x00')[0].startswith(b'/')]
+                 if resolve_sec_name(i).startswith(b'.debug')]
 
         if strip:
             sa = struct.unpack_from('<I', data, opt + 32)[0]

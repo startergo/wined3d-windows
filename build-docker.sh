@@ -79,6 +79,9 @@ for entry in "${VERSIONS[@]}"; do
     echo "Done: $(ls "$OUTPUT_BASE/$WINE_VERSION/")"
     fix_ucrtbase_imports "$OUTPUT_BASE/$WINE_VERSION"
     patch_pe_win98 "$OUTPUT_BASE/$WINE_VERSION"
+    if [ -f "$OUTPUT_BASE/$WINE_VERSION/msvcrt.dll" ]; then
+        python3 "$SCRIPT_DIR/docker/patch_msvcrt.py" "$OUTPUT_BASE/$WINE_VERSION/msvcrt.dll"
+    fi
 done
 
 echo ""

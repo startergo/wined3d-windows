@@ -450,7 +450,6 @@ setup_cflags() {
 
         # CPU targeting (Win98 compatible)
         -march=pentium2 -mtune=core2
-        -fdata-sections -ffunction-sections
         -include stdint.h
 
         # Include paths — wine9x core, then wine9x wine/ and Wine stock as last resort
@@ -607,6 +606,14 @@ compile_compat() {
     # Compile Wine spec stubs (d3d9 @ stub exports, streaming_buffer, vkd3d)
     echo "  CC wine_spec_stubs.c"
     $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_wine_spec_stubs.o" "$SCRIPT_DIR/docker/wine_spec_stubs.c" 2>/dev/null || true
+
+    # Compile heap_compat: CRT functions via kernel32 HeapAlloc/HeapFree (no msvcrt)
+    echo "  CC heap_compat.c"
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_heap_compat.o" "$SCRIPT_DIR/docker/heap_compat.c" 2>/dev/null || true
+
+    # Compile mingw_matherr_stubs: no-op stubs for MinGW internal math symbols
+    echo "  CC mingw_matherr_stubs.c"
+    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_mingw_matherr_stubs.o" "$SCRIPT_DIR/docker/mingw_matherr_stubs.c" 2>/dev/null || true
 }
 
 # ── Link wined3d.dll ───────────────────────────────────────────────
@@ -615,15 +622,18 @@ link_wined3d() {
     local pt_build="$WINE9X/pthread9x/build"
 
     echo "  LD wined3d.dll"
-    $CC -shared -nostartfiles -static-libgcc \
+    $CC -shared -nostdlib -nodefaultlibs -static-libgcc \
         -o "$output" \
         "$obj_dir"/*.o \
         "$pt_build/crtfix.o" \
         "$pt_build/memory.o" \
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
-        -lmsvcrt -lkernel32 -luser32 -lgdi32 -ladvapi32 -lopengl32 \
+        "$obj_dir/_nocrt_entry.o" \
+        "$obj_dir/_mingw_matherr_stubs.o" \
+        -lkernel32 -luser32 -lgdi32 -ladvapi32 -lopengl32 -lmsvcrt -lmingwex -lgcc \
         -Wl,--allow-multiple-definition \
+        -Wl,--file-alignment,0x1000 \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -636,6 +646,11 @@ link_d3d() {
     local pt_build="$WINE9X/pthread9x/build"
     local wined3d_dir="$5"
 
+    local extra_libs="-lkernel32 -lgcc"
+    if [ "$dll_name" = "d3d9" ]; then
+        extra_libs="-lkernel32 -luser32 -lgcc"
+    fi
+
     echo "  LD $dll_name.dll"
     $CC -shared -nostdlib -nodefaultlibs -static-libgcc \
         -o "$output" \
@@ -644,9 +659,12 @@ link_d3d() {
         "$pt_build/memory.o" \
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
-        -L"$wined3d_dir" -lwined3d \
-        -lmsvcrt -lkernel32 -lgdi32 -lgcc \
+        "$obj_dir/_heap_compat.o" \
+        "$obj_dir/_nocrt_entry.o" \
+        -L"$wined3d_dir" -lwined3d -lgdi32 \
+        $extra_libs \
         -Wl,--allow-multiple-definition \
+        -Wl,--file-alignment,0x1000 \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -667,9 +685,12 @@ link_ddraw() {
         "$pt_build/memory.o" \
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
-        -L"$wined3d_dir" -lwined3d \
-        -lmsvcrt -lkernel32 -luser32 -lgdi32 -ladvapi32 -lgcc \
+        "$obj_dir/_heap_compat.o" \
+        "$obj_dir/_nocrt_entry.o" \
+        -L"$wined3d_dir" -lwined3d -lgdi32 \
+        -lkernel32 -luser32 -ladvapi32 -lgcc \
         -Wl,--allow-multiple-definition \
+        -Wl,--file-alignment,0x1000 \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
         -Wl,--enable-stdcall-fixup \
         -Wl,--image-base,0x10000000 \
@@ -735,6 +756,17 @@ build_version() {
     # Setup CFLAGS
     setup_cflags "$wine_src" "$version"
 
+    # Add ddraw flip behavior define based on Wine version:
+    # ≤3.x: DDRAW_FLIP_CALL_FPSLIMIT (reference imports flip_fpslimit from ddraw)
+    # 4.x-5.x: no define (reference imports neither flip_fpslimit nor surface_ddheap)
+    # ≥6.x: DDRAW_FLIP_CALL_SURFACE_DDHEAP (reference imports surface_ddheap instead)
+    local vmaj=$(echo "$version" | cut -d. -f1)
+    if [ "$vmaj" -lt 4 ]; then
+        CFLAGS_LIST+=("-DDDRAW_FLIP_CALL_FPSLIMIT")
+    elif [ "$vmaj" -ge 6 ]; then
+        CFLAGS_LIST+=("-DDDRAW_FLIP_CALL_SURFACE_DDHEAP")
+    fi
+
     # ── Patch wined3d_gl.h: add wglext.h include + WINE GL externs ──
     if [ -f "$wine_src/dlls/wined3d/wined3d_gl.h" ]; then
         perl -pi -e 's|#include "wine/wgl\.h"|#include "wine/wgl.h"\n#include "wine/wglext.h"\n\nextern void (WINE_GLAPI *glDisableWINE)(GLenum cap) DECLSPEC_HIDDEN;\nextern void (WINE_GLAPI *glEnableWINE)(GLenum cap) DECLSPEC_HIDDEN;\n|' "$wine_src/dlls/wined3d/wined3d_gl.h" 2>/dev/null || true
@@ -746,17 +778,10 @@ build_version() {
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_hooks.c" "$wine_src/dlls/ddraw/qemu3dfx_ddraw_hooks.c" 2>/dev/null || true
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_passthrough.c" "$wine_src/dlls/ddraw/qemu3dfx_ddraw_passthrough.c" 2>/dev/null || true
 
-    # ── W→A display/version API patches (W versions not on Win98) ──
-    # Match Dockerfile approach: direct sed replacement, no wrapper functions
-    local _dx="$wine_src/dlls/wined3d/directx.c"
-    if [ -f "$_dx" ]; then
-        sed -i 's/GetVersionExW/GetVersionExA/g; s/OSVERSIONINFOW/OSVERSIONINFOA/g' "$_dx"
-        sed -i 's/ChangeDisplaySettingsExW/ChangeDisplaySettingsExA/g' "$_dx"
-        sed -i 's/EnumDisplayDevicesW/EnumDisplayDevicesA/g; s/DISPLAY_DEVICEW/DISPLAY_DEVICEA/g' "$_dx"
-        sed -i 's/EnumDisplaySettingsExW/EnumDisplaySettingsExA/g' "$_dx"
-        sed -i 's/EnumDisplaySettingsW/EnumDisplaySettingsA/g' "$_dx"
-        sed -i 's/\bDEVMODEW\b/DEVMODEA/g' "$_dx"
-    fi
+    # ── W→A display/version/monitor API patches (W versions not on Win98) ──
+    # Apply to ALL wined3d .c files, not just directx.c
+    find "$wine_src/dlls/wined3d" -name "*.c" -exec sed -i \
+        's/GetVersionExW/GetVersionExA/g; s/OSVERSIONINFOW/OSVERSIONINFOA/g; s/ChangeDisplaySettingsExW/ChangeDisplaySettingsExA/g; s/EnumDisplayDevicesW/EnumDisplayDevicesA/g; s/DISPLAY_DEVICEW/DISPLAY_DEVICEA/g; s/EnumDisplaySettingsExW/EnumDisplaySettingsExA/g; s/EnumDisplaySettingsW/EnumDisplaySettingsA/g; s/\bDEVMODEW\b/DEVMODEA/g; s/GetMonitorInfoW/GetMonitorInfoA/g; s/MONITORINFOEXW/MONITORINFOEXA/g; s/\bCreateDCW\b/CreateDCA/g' {} +
 
     # W→A string/event API patches (Win98 has no lstrcmpiW/lstrcpyW/CreateEventW)
     find "$wine_src/dlls/wined3d" -name "*.c" -exec sed -i \
@@ -880,6 +905,8 @@ main() {
 
     # Patch debug.c: remove GetCurrentThreadId from debug output
     sed -i 's/debug_classes\[cls\], GetCurrentThreadId(), channel->name, func/debug_classes[cls], 0, channel->name, func/' "$WINE9X/compact/debug.c"
+    # Patch debug.c: exit(1) → ExitProcess(1) to avoid importing exit from msvcrt
+    sed -i 's/\bexit(1)/ExitProcess(1)/g' "$WINE9X/compact/debug.c"
 
     # Build each version
     for entry in "${VERSIONS[@]}"; do

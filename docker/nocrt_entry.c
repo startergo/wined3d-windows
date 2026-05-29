@@ -12,29 +12,6 @@ DECLSPEC_SELECTANY UINT_PTR __security_cookie_complement = ~(DEFAULT_SECURITY_CO
 
 void __cdecl __security_init_cookie(void)
 {
-    UINT_PTR cookie;
-    FILETIME systime;
-    LARGE_INTEGER perfctr;
-
-    if (__security_cookie != DEFAULT_SECURITY_COOKIE) {
-        __security_cookie_complement = ~__security_cookie;
-        return;
-    }
-
-    GetSystemTimeAsFileTime(&systime);
-    cookie = systime.dwLowDateTime;
-    cookie ^= systime.dwHighDateTime;
-    cookie ^= GetCurrentProcessId();
-    cookie ^= GetCurrentThreadId();
-    cookie ^= GetTickCount();
-    QueryPerformanceCounter(&perfctr);
-    cookie ^= perfctr.LowPart;
-    cookie ^= perfctr.HighPart;
-
-    if (cookie == DEFAULT_SECURITY_COOKIE)
-        cookie = DEFAULT_SECURITY_COOKIE + 1;
-    __security_cookie = cookie;
-    __security_cookie_complement = ~cookie;
 }
 
 /* Default DllMain — overriden by DLLs that have their own (wined3d, ddraw).
@@ -59,4 +36,4 @@ WINBOOL WINAPI DllMainCRTStartup(HANDLE hDllHandle, DWORD dwReason, LPVOID lpRes
 }
 
 void _pei386_runtime_relocator(void) {}
-void __cdecl _amsg_exit(int code) { ExitProcess((UINT)code); }
+void __cdecl _amsg_exit(int code) { for (;;); }

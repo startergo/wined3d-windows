@@ -107,6 +107,7 @@ RUN set -ex && \
     find /build/pthread9x/src -name '*.c' -exec sed -i 's/(DWORD \*) &info/(ULONG_PTR *) \&info/g' {} + && \
     true "=== Patch debug.c: remove GetCurrentThreadId from debug log ===" && \
     sed -i 's/debug_classes\[cls\], GetCurrentThreadId(), channel->name, func/debug_classes[cls], 0, channel->name, func/' compact/debug.c && \
+    sed -i 's/\bexit(1)/return/g' compact/debug.c && \
     \
     true "=== Copy wined3d source from Wine ${WINE_VERSION} ===" && \
     mkdir -p /build/wined3d && \
@@ -209,13 +210,9 @@ RUN set -ex && \
     sed -i 's/CS_HREDRAW | CS_VREDRAW/CS_HREDRAW | CS_VREDRAW | CS_OWNDC/' \
         /build/wined3d/wined3d_main.c && \
     \
-    true "=== Win9x: W→A display/version API patches (W versions not on Win98) ===" && \
-    sed -i 's/GetVersionExW/GetVersionExA/g; s/OSVERSIONINFOW/OSVERSIONINFOA/g' /build/wined3d/directx.c && \
-    sed -i 's/ChangeDisplaySettingsExW/ChangeDisplaySettingsExA/g' /build/wined3d/directx.c && \
-    sed -i 's/EnumDisplayDevicesW/EnumDisplayDevicesA/g; s/DISPLAY_DEVICEW/DISPLAY_DEVICEA/g' /build/wined3d/directx.c && \
-    sed -i 's/EnumDisplaySettingsExW/EnumDisplaySettingsExA/g' /build/wined3d/directx.c && \
-    sed -i 's/EnumDisplaySettingsW/EnumDisplaySettingsA/g' /build/wined3d/directx.c && \
-    sed -i 's/\bDEVMODEW\b/DEVMODEA/g' /build/wined3d/directx.c && \
+    true "=== Win9x: W→A display/version/monitor API patches (W versions not on Win98) ===" && \
+    find /build/wined3d -name "*.c" -exec sed -i \
+        's/GetVersionExW/GetVersionExA/g; s/OSVERSIONINFOW/OSVERSIONINFOA/g; s/ChangeDisplaySettingsExW/ChangeDisplaySettingsExA/g; s/EnumDisplayDevicesW/EnumDisplayDevicesA/g; s/DISPLAY_DEVICEW/DISPLAY_DEVICEA/g; s/EnumDisplaySettingsExW/EnumDisplaySettingsExA/g; s/EnumDisplaySettingsW/EnumDisplaySettingsA/g; s/\bDEVMODEW\b/DEVMODEA/g; s/GetMonitorInfoW/GetMonitorInfoA/g; s/MONITORINFOEXW/MONITORINFOEXA/g; s/\bCreateDCW\b/CreateDCA/g' {} + && \
     \
     true "=== Win9x: W→A string/event API patches ===" && \
     find /build/wined3d -name "*.c" -exec sed -i 's/\blstrcmpiW\b/lstrcmpiA/g; s/\blstrcpyW\b/lstrcpyA/g; s/\bCreateEventW\b/CreateEventA/g' {} + && \
@@ -277,9 +274,11 @@ RUN set -ex && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
     echo "wined3d_OBJS += wined3d/d3dkmt_stubs.c.o" >> Makefile && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
-    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_passthrough.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o" >> Makefile && \
-    echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o" >> Makefile && \
-    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
+    echo "wined3d_OBJS += /build/nocrt_entry.o" >> Makefile && \
+    echo "wined3d_OBJS += /build/mingw_matherr_stubs.o" >> Makefile && \
+    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_passthrough.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
+    echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
+    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
     \
     echo "=== Add qemu-3dfx exports to wined3d.def ===" && \
     echo "  wined3d_hal_3dfx" >> wined3d/wined3d.def && \
@@ -298,6 +297,9 @@ RUN set -ex && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/libwine_stubs.o /docker/libwine_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/wine_spec_stubs.o /docker/wine_spec_stubs.c && \
+    i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/heap_compat.o /docker/heap_compat.c && \
+    i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/nocrt_entry.o /docker/nocrt_entry.c && \
+    i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/mingw_matherr_stubs.o /docker/mingw_matherr_stubs.c && \
     \
     echo "=== Copy and pre-compile qemu-3dfx hooks ===" && \
     cp /docker/qemu3dfx_hooks.c wined3d/qemu3dfx_hooks.c && \
@@ -306,7 +308,13 @@ RUN set -ex && \
     cp /docker/d3dkmt_stubs.c wined3d/d3dkmt_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/qemu3dfx_hooks.c.o wined3d/qemu3dfx_hooks.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -Iwined3d -c -o ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_hooks.c && \
-    i686-w64-mingw32-gcc $CFLAGS_HOOKS -Iwined3d -Iddraw -c -o ddraw/qemu3dfx_ddraw_passthrough.c.o ddraw/qemu3dfx_ddraw_passthrough.c && \
+    DDRAW_FLIP_DEF="" && \
+    if [ "$WINE_MAJ" -lt 4 ]; then \
+        DDRAW_FLIP_DEF="-DDDRAW_FLIP_CALL_FPSLIMIT"; \
+    elif [ "$WINE_MAJ" -ge 6 ]; then \
+        DDRAW_FLIP_DEF="-DDDRAW_FLIP_CALL_SURFACE_DDHEAP"; \
+    fi && \
+    i686-w64-mingw32-gcc $CFLAGS_HOOKS $DDRAW_FLIP_DEF -Iwined3d -Iddraw -c -o ddraw/qemu3dfx_ddraw_passthrough.c.o ddraw/qemu3dfx_ddraw_passthrough.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/d3dkmt_stubs.c.o wined3d/d3dkmt_stubs.c && \
     \
     echo "=== Patch ddraw source for qemu-3dfx ===" && \
@@ -321,6 +329,10 @@ extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/
     sed -i -e '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_cooplevel(DWORD *);' \
            -e '/DDRAW_dump_cooperativelevel(cooplevel);/a\    qemu3dfx_ddraw_cooplevel(\&cooplevel);' ddraw/ddraw.c && \
     sed -i '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_blit(void);\nextern void qemu3dfx_ddraw_flip(void);\nextern void qemu3dfx_ddraw_rtv(void *);' ddraw/surface.c && \
+    sed -i 's/return wined3d_texture_blt(dst_surface/qemu3dfx_ddraw_blit();\n    return wined3d_texture_blt(dst_surface/' ddraw/surface.c && \
+    sed -i 's/return wined3d_device_context_blt(ddraw/qemu3dfx_ddraw_blit();\n    return wined3d_device_context_blt(ddraw/' ddraw/surface.c && \
+    sed -i 's/\(DDSCAPS2\? caps = {DDSCAPS_FLIP.*\)/\1\n    qemu3dfx_ddraw_flip();/' ddraw/surface.c && \
+    sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' ddraw/surface.c && \
     \
     echo "=== Create config.mk ===" && \
     echo "CC      = i686-w64-mingw32-gcc" > config.mk && \
@@ -334,15 +346,20 @@ extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/
     echo 'CPPFLAGS = -I/docker' >> config.mk && \
     echo 'CFLAGS += -I/docker' >> config.mk && \
     echo 'CXXFLAGS += -I/docker' >> config.mk && \
-    echo 'TUNE    = -I/docker -march=pentium2 -mtune=core2 -fno-stack-protector -fdata-sections -ffunction-sections -DDCX_USESTYLE=0x00010000 -D__USE_MINGW_ANSI_STDIO=0' >> config.mk && \
-    echo 'TUNE_LD = ,--allow-multiple-definition,--gc-sections' >> config.mk && \
+    echo 'TUNE    = -I/docker -march=pentium2 -mtune=core2 -fno-stack-protector -DDCX_USESTYLE=0x00010000 -D__USE_MINGW_ANSI_STDIO=0' >> config.mk && \
+    echo 'TUNE_LD = ,--allow-multiple-definition,--file-alignment,0x1000' >> config.mk && \
+    sed -i 's/BASE_wined3d.dll.*/BASE_wined3d.dll  = 0x10000000/' Makefile && \
+    sed -i 's/BASE_winedd.dll.*/BASE_winedd.dll   = 0x10000000/' Makefile && \
+    sed -i 's/BASE_wined8.dll.*/BASE_wined8.dll   = 0x10000000/' Makefile && \
+    sed -i 's/BASE_wined9.dll.*/BASE_wined9.dll   = 0x10000000/' Makefile && \
     true "=== Pre-compile Wine 6.0+ GL source files via make pattern rule ===" && \
     [ -f wined3d/adapter_gl.c ] && make wined3d/adapter_gl.c.o || true && \
     [ -f wined3d/context_gl.c ] && make wined3d/context_gl.c.o || true && \
-    true "=== Link ddraw/d3d8/d3d9 with nocrt (no CRT startup, only math from msvcrt) ===" && \
-    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$ddraw_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$ddraw_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
-    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$d3d8_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$d3d8_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
-    sed -i 's|\$\$LD) \$\$CFLAGS) \$\$d3d9_OBJS) \$\$DX_LIBS) \$\$DLLFLAGS)|\$\$LD) \$\$CFLAGS) \$\$d3d9_OBJS) -static-libgcc -L. -lwined3d -lgdi32 -lmsvcrt \$\$DLLFLAGS_NOCRT)|' Makefile && \
+    true "=== Link ddraw/d3d8/d3d9 with nocrt, wined3d with nocrt+msvcrt ===" && \
+    sed -i '/ddraw_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -ladvapi32 $(DLLFLAGS_NOCRT)/' Makefile && \
+    sed -i '/d3d8_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 $(DLLFLAGS_NOCRT)/' Makefile && \
+    sed -i '/d3d9_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 $(DLLFLAGS_NOCRT)/' Makefile && \
+    sed -i '/wined3d_OBJS.*WINED3D_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -lgdi32 -ladvapi32 -lopengl32 $(DLLFLAGS_NOCRT) -lmsvcrt -lmingwex/' Makefile && \
     true "=== Build all DLLs ===" && \
     make wined3d.dll winedd.dll wined8.dll wined9.dll && \
     \
@@ -385,8 +402,24 @@ extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/
         echo "=== Patch stdio.h + corecrt_wstdio.h: disable UCRT inline wrappers ===" && \
         sed -i 's/^#if defined(_UCRT) && !defined(_NO_CRT_STDIO_INLINE)/#if 0/' /tmp/wine-${WINE_VERSION}/include/msvcrt/stdio.h && \
         sed -i 's/^#if defined(_UCRT) && !defined(_NO_CRT_STDIO_INLINE)/#if 0/' /tmp/wine-${WINE_VERSION}/include/msvcrt/corecrt_wstdio.h && \
+        echo "=== Patch debug.h: disable ALL debug output (source, native-tools, and cross-build trees) ===" && \
+        for d in /tmp/wine-${WINE_VERSION} /tmp/wine-tools /tmp/wine-cross; do \
+            f="$d/include/wine/debug.h"; \
+            [ -f "$f" ] && sed -i 's/^#define __WINE_GET_DEBUGGING_ERR(dbch)  ((dbch)->flags & (1 << __WINE_DBCL_ERR))/#define __WINE_GET_DEBUGGING_ERR(dbch)  0/' "$f" && echo "  patched $f"; \
+        done && \
+        echo "=== Patch msvcrt source: add WINE_NO_DEBUG_MSGS to each .c file ===" && \
+        for f in /tmp/wine-${WINE_VERSION}/dlls/msvcrt/*.c; do \
+            sed -i '1i#define WINE_NO_TRACE_MSGS 1\n#define WINE_NO_DEBUG_MSGS 1' "$f"; \
+        done && \
+        echo "=== Patch msvcrt Makefile: add --image-base and debug-disable flags ===" && \
+        grep -q 'image-base' dlls/msvcrt/Makefile || \
+            sed -i '/^EXTRADLLFLAGS/s/$/ -Wl,--image-base,0x10000000/' dlls/msvcrt/Makefile && \
+        grep -q 'WINE_NO_DEBUG' dlls/msvcrt/Makefile || \
+            sed -i '/^EXTRADEFS/s/$/ -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS/' dlls/msvcrt/Makefile && \
         mkdir -p /output/${WINE_VERSION} && \
-        make -j$(nproc) dlls/msvcrt/msvcrt.dll CFLAGS+="-U_UCRT" 2>&1 | tail -20 && \
+        make -j$(nproc) dlls/msvcrt/msvcrt.dll CFLAGS+="-U_UCRT -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS" 2>&1 | tail -20 && \
+        echo "=== Binary-patch msvcrt.dll: remove __wine_dbg_* imports, fix ImageBase ===" && \
+        python3 /docker/patch_msvcrt.py /tmp/wine-cross/dlls/msvcrt/msvcrt.dll && \
         cp dlls/msvcrt/msvcrt.dll /output/${WINE_VERSION}/msvcrt.dll && \
         echo "Built msvcrt.dll from Wine source" || \
         echo "WARNING: msvcrt.dll build failed"; \

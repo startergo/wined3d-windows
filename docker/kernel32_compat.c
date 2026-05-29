@@ -47,28 +47,21 @@ __asm__("\n"
 );
 
 /* --- GetSystemTimeAsFileTime (Win2k+, not on Win98) --- */
-void __stdcall GetSystemTime(void *st);
-int __stdcall SystemTimeToFileTime(const void *st, void *ft);
 void __stdcall GetSystemTimeAsFileTime(void *lpFileTime)
 {
-    char st[16];
-    GetSystemTime(st);
-    SystemTimeToFileTime(st, lpFileTime);
+    unsigned char *ft = (unsigned char *)lpFileTime;
+    int i; for (i = 0; i < 8; i++) ft[i] = 0;
 }
 
 /* --- GetModuleHandleExW (kernel32, XP+ — not on Win98) --- */
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
 HMODULE __stdcall GetModuleHandleA(const char *);
-typedef struct { void *BaseAddress; void *AllocationBase; DWORD Partition; DWORD RegionSize; DWORD State; DWORD Protect; DWORD Type; } MBINFO;
-DWORD __stdcall VirtualQuery(const void *, MBINFO *, DWORD);
 BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
 {
     if(!module) return 0;
     if(flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
-        MBINFO mbi;
-        if(VirtualQuery((const void *)name, &mbi, sizeof(mbi)))
-            { *module = (HMODULE)mbi.AllocationBase; return 1; }
-        return 0;
+        *module = (HMODULE)0x400000;
+        return 1;
     }
     if(!name) { *module = (HMODULE)0x400000; return 1; }
     { char buf[260]; int i; for(i=0; i<259 && name[i]; i++) buf[i]=(char)name[i]; buf[i]=0;
@@ -87,35 +80,17 @@ void *__stdcall HeapCreate(unsigned long flOptions, unsigned long dwInitialSize,
 typedef struct { DWORD dwLength; DWORD dwMemoryLoad; unsigned __LONG32 ullTotalPhys; unsigned __LONG32 ullAvailPhys; unsigned __LONG32 ullTotalPageFile; unsigned __LONG32 ullAvailPageFile; unsigned __LONG32 ullTotalVirtual; unsigned __LONG32 ullAvailVirtual; unsigned __LONG32 ullAvailExtendedVirtual; } MEMORYSTATUSEX;
 BOOL __stdcall GlobalMemoryStatusEx(MEMORYSTATUSEX *lpBuffer)
 {
-    typedef struct { DWORD dwLength; DWORD dwMemoryLoad; unsigned __LONG32 dwTotalPhys; unsigned __LONG32 dwAvailPhys; unsigned __LONG32 dwTotalPageFile; unsigned __LONG32 dwAvailPageFile; unsigned __LONG32 dwTotalVirtual; unsigned __LONG32 dwAvailVirtual; } MEMORYSTATUS;
-    void __stdcall GlobalMemoryStatus(MEMORYSTATUS *);
-    MEMORYSTATUS ms;
     if (!lpBuffer || lpBuffer->dwLength < sizeof(MEMORYSTATUSEX)) return 0;
-    ms.dwLength = sizeof(MEMORYSTATUS);
-    GlobalMemoryStatus(&ms);
-    lpBuffer->dwMemoryLoad = ms.dwMemoryLoad;
-    lpBuffer->ullTotalPhys = ms.dwTotalPhys;
-    lpBuffer->ullAvailPhys = ms.dwAvailPhys;
-    lpBuffer->ullTotalPageFile = ms.dwTotalPageFile;
-    lpBuffer->ullAvailPageFile = ms.dwAvailPageFile;
-    lpBuffer->ullTotalVirtual = ms.dwTotalVirtual;
-    lpBuffer->ullAvailVirtual = ms.dwAvailVirtual;
-    lpBuffer->ullAvailExtendedVirtual = 0;
-    return 1;
+    return 0;
 }
 
 /* --- FreeLibraryAndExitThread (Win2k+, not on Win98) --- */
-int __stdcall FreeLibrary(void *);
-void __stdcall ExitThread(unsigned long);
 void __stdcall FreeLibraryAndExitThread(void *hModule, unsigned long dwExitCode)
 {
-    FreeLibrary(hModule);
-    ExitThread(dwExitCode);
     for (;;);
 }
 
 /* --- SetThreadDescription (Win10+, not on Win98) --- */
-void *__stdcall GetCurrentThread(void);
 void __stdcall SetThreadDescription(void *hThread, const WCHAR *lpThreadDescription)
 {
 }
