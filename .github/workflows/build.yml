@@ -146,23 +146,33 @@ jobs:
       - name: Verify dependencies
         shell: msys2 {0}
         run: |
-          fail=0
-          for dll in wined3d d3d9 d3d8 ddraw; do
-            path="output/${{ matrix.wine_version }}/${dll}.dll"
-            [ -f "$path" ] || continue
-            echo "=== ${dll}.dll imports ==="
-            objdump -p "$path" | grep "DLL Name"
-            if objdump -p "$path" | grep -q "ucrtbase"; then
-              echo "ERROR: ${dll}.dll links against ucrtbase.dll — must use msvcrt instead"
-              fail=1
-            fi
-            if objdump -p "$path" | grep -q "libwine.dll"; then
-              echo "ERROR: ${dll}.dll links against libwine.dll — should be static"
-              fail=1
-            fi
-            echo "OK"
-          done
-          exit $fail
+          pip install pefile >/dev/null 2>&1
+          python3 -c "
+          import pefile, sys, glob
+          fail = False
+          for path in sorted(glob.glob('output/${{ matrix.wine_version }}/*.dll')):
+              name = path.split('/')[-1]
+              try:
+                  pe = pefile.PE(path)
+              except Exception as e:
+                  print(f'ERROR: {name}: cannot parse PE: {e}')
+                  fail = True
+                  continue
+              imports = []
+              if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
+                  for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                      dll = entry.dll.decode().lower()
+                      imports.append(dll)
+                      if dll == 'ucrtbase.dll':
+                          print(f'ERROR: {name} links against ucrtbase.dll — must use msvcrt instead')
+                          fail = True
+                      if dll == 'libwine.dll':
+                          print(f'ERROR: {name} links against libwine.dll — should be static')
+                          fail = True
+              print(f'=== {name} imports: {\" \".join(imports)}')
+              print('OK')
+          sys.exit(1 if fail else 0)
+          "
 
       - name: Upload DLLs
         uses: actions/upload-artifact@v4
