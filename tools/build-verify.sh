@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 echo "=== $(date) building $WINE_VERSION ($BUILD_MODE) ===" | tee "$LOG"
 docker build --platform linux/amd64 --progress=plain \
     --build-arg WINE_VERSION=$WINE_VERSION --build-arg WINE_BRANCH=$WINE_BRANCH \
-    --build-arg WINE_EXT=$WINE_EXT --build-arg BUILD_MSVCRT=$BUILD_MSVCRT \
+    --build-arg WINE_EXT=$WINE_EXT --build-arg BUILD_MSVCRT=$BUILD_MSVCRT --build-arg DEBUG_LOG=${DEBUG_LOG:-0} --build-arg QEMU3DFX_SKIP_WINED3D=${QEMU3DFX_SKIP_WINED3D:-0} --build-arg QEMU3DFX_ONLY=${QEMU3DFX_ONLY:-} \
     --build-arg BUILD_MODE=$BUILD_MODE \
     -t wine-dll-builder:$WINE_VERSION . >> "$LOG" 2>&1
 rc=$?

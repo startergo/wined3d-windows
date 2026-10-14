@@ -38,6 +38,11 @@ ARG WINE_VERSION=1.8.7
 ARG WINE_BRANCH=1.8
 ARG WINE_EXT=tar.bz2
 ARG BUILD_MSVCRT=0
+# DEBUG_LOG=1: ERR/WARN/FIXME to the guest's COM1 (docker/debug_serial.py)
+ARG DEBUG_LOG=0
+# bisecting: QEMU3DFX_SKIP_WINED3D=1 / QEMU3DFX_ONLY=i:j (docker/qemu3dfx_callsites.py)
+ARG QEMU3DFX_SKIP_WINED3D=0
+ARG QEMU3DFX_ONLY=
 ARG BUILD_MODE=legacy
 
 # ── Copy wine9x-support infrastructure ─────────────────────────────
@@ -128,6 +133,13 @@ RUN set -ex && \
     cp /tmp/wine-${WINE_VERSION}/dlls/d3d9/*.c /build/d3d9/ && \
     cp /tmp/wine-${WINE_VERSION}/dlls/d3d9/*.h /build/d3d9/ 2>/dev/null || true && \
     cp /wine9x/d3d9/*.rc /build/d3d9/ && \
+    true "=== Version resources matching the reference (wine9x's are stale: ddraw 5.3.1.904, wined3d 1.17.55) ===" && \
+    python3 /docker/gen_version_rc.py ${WINE_VERSION} /tmp/wine-${WINE_VERSION} /tmp/verrc && \
+    cp /tmp/verrc/ddraw.rc /build/ddraw/dwine.rc && \
+    cp /tmp/verrc/d3d8.rc /build/d3d8/d3d8.rc && \
+    cp /tmp/verrc/d3d9.rc /build/d3d9/d3d9.rc && \
+    cp /tmp/verrc/wined3d.rc /build/wined3d/wined3d.rc && \
+    if [ "$DEBUG_LOG" = "1" ]; then python3 /docker/debug_serial.py /build; fi && \
     \
     true "=== Strip Makefile entries for source files absent in this Wine version ===" && \
     for dir in wined3d ddraw d3d8 d3d9; do \
@@ -254,7 +266,7 @@ RUN set -ex && \
     find /build/wined3d -name '*.c' -exec grep -l 'wined3d_private\.h' {} \; | xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true && \
     \
     true "=== qemu-3dfx call sites into Wine source (fails the build if an anchor moved) ===" && \
-    python3 /docker/qemu3dfx_callsites.py /build ${WINE_VERSION} && \
+    QEMU3DFX_SKIP_WINED3D=$QEMU3DFX_SKIP_WINED3D QEMU3DFX_ONLY=$QEMU3DFX_ONLY python3 /docker/qemu3dfx_callsites.py /build ${WINE_VERSION} && \
     true "=== Generate .def from Wine spec (add HAL stubs and COM exports for ddraw) ===" && \
     echo "EXPORTS" > /build/wined3d/wined3d.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \

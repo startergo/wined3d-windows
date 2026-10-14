@@ -795,6 +795,32 @@ EDITS += [
 ]
 
 
+# ---- the wined3d announcement to the host (all versions) --------------------
+# Reference (all versions; 6.0.4 at 0x1000cefb/0x1004bf84): in
+# test_pbo_functionality's "no PBO" early return, wined3d identifies itself
+# to qemu-3dfx through the magic glDebugMessageInsertARB channel as
+# "Wine-<version> Direct3D build <__TIME__> <__DATE__>" (a 64-byte message).
+# Without it the host never sees a Wine D3D client and our adapter set-up
+# stopped after the GL capability probe (3DMark 99: "requires a DirectX 6
+# compatible 3D-accelerator").
+_ANNOUNCE = ('if (!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT])\n'
+             '{\n'
+             '    if (gl_info->supported[ARB_DEBUG_OUTPUT])\n'
+             '    {\n'
+             '        char qemu3dfx_id[64] = "Wine-@WINE_VERSION@ Direct3D build " __TIME__ " " __DATE__;\n'
+             '\n'
+             '        GL_EXTCALL(glDebugMessageInsertARB(0x824b, 0x8251, 0x9148, ~0u, 0x40, qemu3dfx_id));\n'
+             '    }\n'
+             '    return;\n'
+             '}')
+EDITS += [
+    ('directx.c', r'static void test_pbo_functionality\(',
+     r'if \(!gl_info->supported\[ARB_PIXEL_BUFFER_OBJECT\]\) return;', 'replace', _ANNOUNCE, {1, 2, 3}),
+    ('adapter_gl.c', r'static void test_pbo_functionality\(',
+     r'if \(!gl_info->supported\[ARB_PIXEL_BUFFER_OBJECT\]\) return;', 'replace', _ANNOUNCE, {4, 5, 6, 7, 8}),
+]
+
+
 def function_span(src, func_re):
     """(start, end) of the body of the first function whose definition
     matches func_re (start at its opening brace, end after its closing one)."""
@@ -823,6 +849,17 @@ def main():
     major = int(version.split('.')[0])
     minor_key = '.'.join(version.split('.')[:2])       # e.g. '1.9': versions may name a minor
     todo = [e for e in EDITS if major in e[5] or minor_key in e[5]]
+    # bisecting aids: QEMU3DFX_SKIP_WINED3D=1 drops the wined3d edits;
+    # QEMU3DFX_ONLY=<i>:<j> keeps only wined3d edits i..j-1 (in list order)
+    wd = [e for e in todo if '/' not in e[0]]
+    if os.environ.get('QEMU3DFX_SKIP_WINED3D') == '1':
+        todo = [e for e in todo if '/' in e[0]]
+        print('qemu3dfx call sites: wined3d edits skipped (QEMU3DFX_SKIP_WINED3D)')
+    elif os.environ.get('QEMU3DFX_ONLY'):
+        i, j = (int(x) for x in os.environ['QEMU3DFX_ONLY'].split(':'))
+        keep = wd[i:j]
+        todo = [e for e in todo if '/' in e[0] or e in keep]
+        print('qemu3dfx call sites: wined3d edits %d..%d of %d only' % (i, j, len(wd)))
     if not any('/' not in e[0] for e in todo):
         print('qemu3dfx call sites: wined3d sites not mapped for Wine %s yet (module functions stay unused)' % version)
     if not todo:
@@ -848,6 +885,7 @@ def main():
             failed.append('%s: anchor /%s/ matched %d times in /%s/' % (fname, anchor_re, len(hits), func_re))
             continue
         h = hits[0]
+        code = code.replace('@WINE_VERSION@', version)
         pos = span[0] + (h.start() if where == 'before' else h.end())
         ind = indent_at(src, span[0] + h.start())
         block = ''.join((ind + l if l else '') + '\n' for l in code.split('\n'))

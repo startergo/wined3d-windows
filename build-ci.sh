@@ -551,6 +551,14 @@ compile_dll() {
         fi
     done
 
+    # Version resource matching the reference (docker/gen_version_rc.py,
+    # generated in build_version); 3DMark 99 and others check ddraw's version.
+    if [ -f "$wine_src/verrc/$dll_name.rc" ]; then
+        echo "  RC $dll_name/version"
+        windres --input "$wine_src/verrc/$dll_name.rc" --output "$obj_dir/_version_res.o" \
+            --output-format=coff || { echo "    ERROR: windres $dll_name"; return 1; }
+    fi
+
     # Compile compact/debug.c
     echo "  CC $dll_name/debug.c"
     $CC "${dll_cflags[@]}" -c -o "$obj_dir/_debug.o" "$WINE9X/compact/debug.c" 2>&1 || true
@@ -805,6 +813,9 @@ build_version() {
     if [ -f "$wine_src/dlls/wined3d/cs.c" ]; then
         sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/1/' "$wine_src/dlls/wined3d/cs.c"
     fi
+
+    # ── Version resources matching the reference DLLs ──
+    python3 "$SCRIPT_DIR/docker/gen_version_rc.py" "$version" "$wine_src" "$wine_src/verrc"
 
     # ── qemu-3dfx call sites (same patcher as the Docker build; fails on a moved anchor) ──
     python3 "$SCRIPT_DIR/docker/qemu3dfx_callsites.py" "$wine_src/dlls" "$version"

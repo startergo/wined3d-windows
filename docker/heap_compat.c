@@ -3,6 +3,12 @@
    CRT startup from msvcrt.dll. Avoids CRT heap initialization issues on Win98. */
 #include <stddef.h>
 
+/* These functions ARE memset/memcpy/strlen/...: stop GCC from recognising
+ * their loops and replacing them with calls to the same function, which
+ * recursed until the stack overflowed (memset and strlen in ddraw.dll crashed
+ * 3DMark 99 with an invalid page fault). */
+#pragma GCC optimize("no-tree-loop-distribute-patterns")
+
 void *__stdcall GetProcessHeap(void);
 void *__stdcall HeapAlloc(void *heap, unsigned long flags, unsigned long size);
 int   __stdcall HeapFree(void *heap, unsigned long flags, void *ptr);
