@@ -100,6 +100,14 @@ jobs:
           # our pinned versions with latest repo versions (e.g. gcc-libs 15 → 14.2).
           # CRT-git 12.0 + GCC 14.2 produce DLLs compatible with Win98's msvcrt.dll.
           BASE=https://repo.msys2.org/mingw/mingw32
+          # MSYS2's GCC 16 packages split runtime libraries (libatomic, ...) out
+          # of gcc-libs and declare a conflict with older gcc-libs; remove them
+          # first — the pinned gcc-libs 14.2 provides the same DLLs.
+          for p in libatomic libgomp libquadmath libstdc++ libgfortran; do
+            if pacman -Q "mingw-w64-i686-$p" >/dev/null 2>&1; then
+              pacman -Rdd --noconfirm "mingw-w64-i686-$p"
+            fi
+          done
           pacman -U --noconfirm --overwrite '*' --nodeps \
             ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
