@@ -108,7 +108,10 @@ jobs:
               pacman -Rdd --noconfirm "mingw-w64-i686-$p"
             fi
           done
-          pacman -U --noconfirm --overwrite '*' --nodeps \
+          # --nodeps twice: skip dependency resolution entirely (once only skips
+          # version checks and would still pull missing deps such as GCC 16's
+          # libatomic from the repo, which conflicts with gcc-libs 14.2).
+          pacman -U --noconfirm --overwrite '*' --nodeps --nodeps \
             ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-winpthreads-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
