@@ -109,12 +109,17 @@ jobs:
             fi
           done
           # --nodeps twice: skip dependency resolution entirely (once only skips
-          # version checks and would still pull missing deps such as GCC 16's
-          # libatomic from the repo, which conflicts with gcc-libs 14.2).
+          # version checks and still resolves the virtual cc-libs dependency to
+          # GCC 16's split runtime, whose libatomic conflicts with gcc-libs
+          # 14.2). Every runtime package gcc.exe needs is therefore listed
+          # explicitly: gcc-libs 14.2 ships libgcc/libatomic/libstdc++, and
+          # libwinpthread-1.dll comes from libwinpthread-git.
           pacman -U --noconfirm --overwrite '*' --nodeps --nodeps \
             ${BASE}/mingw-w64-i686-headers-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-crt-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-winpthreads-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-libwinpthread-git-12.0.0.r480.gea22a99cb-1-any.pkg.tar.zst \
+            ${BASE}/mingw-w64-i686-windows-default-manifest-6.4-4-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-binutils-2.44-4-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-gcc-14.2.0-3-any.pkg.tar.zst \
             ${BASE}/mingw-w64-i686-gcc-libs-14.2.0-3-any.pkg.tar.zst \
