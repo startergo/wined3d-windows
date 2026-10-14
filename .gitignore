@@ -9,9 +9,23 @@ wine-*.*
 
 # Test binaries
 tests/run_test_hooks
+tests/run_test_hooks_1_8
 tests/run_test_ddraw_stubs
 tests/run_test_passthrough
 output/
 reference_dll_analysis.txt
 reference_analysis.md
-agents/
+agents/vc6/
+
+# Emulator tests: build output and third-party reference DLLs (extracted locally)
+tests/emu/build/
+tests/emu/reference/
+# Verification builds (tools/build-verify.sh)
+output-verify/
+
+# reverse-engineering scratch (symbol builds extracted from the Docker image)
+re-work/
+
+# local Wine source trees and tool state
+.wine-src/
+.serena/

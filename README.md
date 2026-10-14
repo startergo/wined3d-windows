@@ -13,7 +13,7 @@ Each Wine version produces four D3D DLLs:
 | DLL | Description |
 |-----|-------------|
 | `wined3d.dll` | Wine's Direct3D translation layer + qemu-3dfx passthrough hooks |
-| `ddraw.dll` | DirectDraw + VidMem HAL stubs + ddrawwq.dll passthrough bridge |
+| `ddraw.dll` | DirectDraw + qemu-3dfx call sites + ddthru routing to the system DirectDraw (`ddrawwq.dll`) |
 | `d3d8.dll` | Direct3D 8 |
 | `d3d9.dll` | Direct3D 9 |
 
@@ -34,6 +34,10 @@ Win98 loading.
 | 7.0.2 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
 | 8.0.2 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
 
+The Vulkan sources (`adapter_vk.c`, `context_vk.c`, `shader_spirv.c`) are
+never linked — Win98 has no Vulkan; `docker/vk_stubs.c` provides their entry
+points.
+
 All versions download the Wine source tarball, extract wined3d/ddraw/d3d8/d3d9
 .c/.h files, and apply compatibility patches before building with the
 wine9x-support Makefile and direct MinGW gcc compilation. The wine9x-support
@@ -42,55 +46,103 @@ the actual DLL source comes from the Wine tarball.
 
 ## qemu-3dfx Passthrough Hooks
 
-Custom code injected into the DLL builds, reverse-engineered from the
-reference qemu-3dfx Wine 1.8.7 DLLs. Full documentation in
-[`qemu-3dx-hooks.md`](qemu-3dx-hooks.md).
+The qemu-3dfx project ships prebuilt Wine DLLs but has not published its
+modified Wine source, so these additions are reconstructed from the reference
+qemu-3dfx binaries (Wine 1.8.7 … 8.0.2) and verified against
+their machine code with the emulator tests in [`tests/emu/`](tests/emu/README.md).
+Each function in the sources cites the reference address it came from.
 
-### wined3d.dll — 7 custom exports
+### wined3d.dll — qemu-3dfx module (`qemu3dfx_hooks.c`)
 
-| Export | Purpose |
-|--------|---------|
-| `wined3d_hal_3dfx` | HAL detection: checks exe name (ds9dw.exe) via GetModuleFileNameA, then probes display adapter for "QEMU Bochs" via EnumDisplayDevicesA |
-| `wined3d_enum_hal_last` | Returns HAL enumeration complete flag (default TRUE) |
-| `wined3d_passthru` | Set/get passthrough mode |
-| `wined3d_override_cooplevel` | XORs flags into cooperative level for passthrough |
-| `wined3d_override_rendertarget_view` | Sets bit 0x01 at offset 0x28 in resource access_flags |
-| `wined3d_blit_fpslimit` | Blit frame rate limiter (GetTickCount + Sleep) |
-| `wined3d_flip_fpslimit` | Flip frame rate limiter (GetTickCount + Sleep) |
+Configuration is read from `HKCU\Software\Wine\Direct3D`, with
+`HKCU\Software\Wine\AppDefaults\<exe>\Direct3D` taking priority:
 
-### ddraw.dll — 20 HAL stubs + 6 COM helpers + ddrawwq.dll switcher
+| Value | Type | Effect | Default |
+|-------|------|--------|---------|
+| `D3D1Hal3Dfx` | `"enabled"` | enable the 3dfx HAL (`wined3d_hal_3dfx`) | off (on for `ds9dw.exe`) |
+| `D3D1EnumHalLast` | `"disabled"` | enumerate the HAL device first | HAL last |
+| `DDSurfaceHeap` | `"disabled"` | `wined3d_surface_ddheap` (6.0+) | on |
+| `UseLastContextTid` | `"enabled"`/`"disabled"` | context thread selection | off (≤7.0), on (8.0) |
+| `BlitFpsLimit` / `FlipFpsLimit` | DWORD | frame cap for Blt (low byte) / Flip (low 7 bits) | 0 = off |
+| `ScaleWindow` | DWORD | scaled window, `(width << 16) \| height`; sign bit = mode 2 | unset |
+| `DisplayROI` | DWORD | crop presentation by `(x << 16) \| y` margins | unset |
+| `OverrideCoopFullscreen` | DWORD | toggle `DDSCL_FULLSCREEN`/`NOWINDOWCHANGES` | unset |
+| `OverrideModeWidth` | DWORD | force display mode width or `w:h`; sign bit = 16 bpp | unset |
+| `SwapInterval` | DWORD | override the swap interval | unset |
 
-**HAL stubs** via `qemu3dfx_ddraw_hooks.c`: No-op stubs for VidMem
-management, surface locking, DSound, and standard ddraw exports. Also
-provides `AcquireDDThreadLock`/`ReleaseDDThreadLock` (forwarding to
-wined3d mutex), `D3DParseUnknownCommand`, `DDInternalLock`/`DDInternalUnlock`,
-and `CompleteCreateSysmemSurface`. The passthrough wrapper handles actual
-video memory.
+Exports called by ddraw.dll:
 
-**ddrawwq.dll switcher** via `qemu3dfx_ddraw_passthrough.c`: At DllMain,
-loads `ddrawwq.dll` (the system's original ddraw renamed by ddthru) and
-forwards DirectDraw calls when qemu-3dfx HAL is active.
+| Export | Behaviour |
+|--------|-----------|
+| `wined3d_hal_3dfx` | `D3D1Hal3Dfx`, else exe basename is `ds9dw.exe` (case-insensitive) |
+| `wined3d_enum_hal_last` | `D3D1EnumHalLast` |
+| `wined3d_surface_ddheap` | `DDSurfaceHeap` (reference exports it from 6.0) |
+| `wined3d_passthru(BOOL *)` | set (non-NULL) / query the passthrough flag |
+| `wined3d_override_cooplevel(DWORD *)` | cooperative-level override from `OverrideCoopFullscreen`/`ScaleWindow` |
+| `wined3d_override_rendertarget_view(view)` | make the view's resource a render target: `usage \|= 0x1` (≤3.0) or `bind_flags \|= 0x20` (4.x+), offset per version |
+| `wined3d_blit_fpslimit` / `wined3d_flip_fpslimit` | frame limiter (`GetTickCount`/`Sleep(0)`) |
+
+Internal API, called from Wine's own code (`docker/qemu3dfx_callsites.py`
+inserts the calls at the places the reference DLLs make them, see
+[`tools/re/CALLSITES.md`](tools/re/CALLSITES.md)): `qemu3dfx_display_roi`,
+`qemu3dfx_override_mode`, `qemu3dfx_swap_interval`, `qemu3dfx_scale_window`,
+the host-cursor channel (`qemu3dfx_cursor_sync`, `qemu3dfx_set_host_cursor`
+via the wrapper's `wglSetDeviceCursor3DFX` and a magic
+`glDebugMessageInsertARB` message), `qemu3dfx_is_qemu_bochs`, the Silent
+Hill 4 video fix (`qemu3dfx_sysmem_count_quirk`), three latches (DLL
+instance, last texture presented to a drawable, last texture read back from
+one) and config accessors.
+
+What the call sites do, by setting:
+
+| Setting | Where it acts |
+|---|---|
+| `ScaleWindow` | display-mode set/get keep the desktop mode and report the requested one; presented frames are stretched to the screen (viewport in the quad blitters, FBO blit rectangle); restore always restores |
+| `DisplayROI` | blit source rectangles (`texture2d_get_blt_info`, FBO blit) |
+| `OverrideModeWidth` | the `DEVMODE` used for mode changes |
+| `SwapInterval` | the GL swap interval after Wine's clamp |
+| `UseLastContextTid` | GL context selection (no per-thread contexts) |
+| `D3D1Hal3Dfx` | Direct3D device enumeration (HAL advertises POW2 textures), 16-bit RGB display modes only |
+| `D3D1EnumHalLast` | emulation devices (Ramp, RGB) enumerated before the HAL |
+| `OverrideCoopFullscreen` | `SetCooperativeLevel` flags |
+| `BlitFpsLimit` / `FlipFpsLimit` | frame limiter in `Unlock` / `Flip` (Flip: Wine ≤ 3.x) |
+| `DDSurfaceHeap` | released surfaces keep a zeroed stub instead of being freed (6.0+) |
+
+Call sites are in place in wined3d and ddraw for every version, 1.8.7–8.0.2.
+
+### ddraw.dll — ddthru routing, call sites, ddrawwq.dll forwarders
+
+**ddthru** (`qemu3dfx_ddthru.c`): `DirectDrawCreate`, `DirectDrawCreateEx`,
+`DirectDrawCreateClipper`, `DirectDrawEnumerateA/ExA` and `GetSurfaceFromDC`
+decide per call whether to run Wine or the system DirectDraw
+(`ddrawwq.dll`, the original `ddraw.dll` renamed by qemu-3dfx's installer):
+calls from inside `ddraw.dll` and calls without a `wined3d.mod` file in the
+current directory go to Wine; with the file, calls go to the system
+DirectDraw unless the caller lies in a range listed in it, one
+`module,size[,offset]` (hex) per line. Each decision is logged to the host
+as `[ ddthru <module> <name> ] at <caller> passthru|winecall`.
+
+**Exports** (`qemu3dfx_ddraw_hooks.c`): `DDInternalLock`/`Unlock`,
+`D3DParseUnknownCommand`, `CompleteCreateSysmemSurface`,
+`Acquire`/`ReleaseDDThreadLock` forward to `ddrawwq.dll` (`E_NOTIMPL`, or
+the wined3d mutex for the thread lock, when it is absent). The `VidMem*`,
+`DDHAL32_*` and related HAL exports are unimplemented in Wine and in the
+reference; they exist for the export table and return 0.
 
 ## Architecture
 
 ```
-Guest Application
+Guest application
     |
     v
-ddraw.dll ──── passthrough bridge (qemu3dfx_ddraw_passthrough.c)
-    |           ├── DllMain → detect qemu-3dfx, load ddrawwq.dll, enable passthrough
-    |           ├── DirectDrawCreate → forwards to ddrawwq.dll
-    |           ├── SetCooperativeLevel → override coop level
-    |           ├── Blit/Flip → FPS limiters
-    |           └── RTV setup → mark for passthrough
-    |
-    |        ──── VidMem HAL stubs (qemu3dfx_ddraw_hooks.c)
-    |           DDHAL32_VidMemAlloc, VidMemFree, etc.
-    |
+ddraw.dll ── ddthru: per-call choice between Wine and ddrawwq.dll (wined3d.mod)
+    |     ── call sites: device enumeration, display modes, cooperative level,
+    |        Unlock/Flip frame limiters, render-target view, surface heap
     v
-wined3d.dll ─── HAL detection (exe name + "QEMU Bochs" adapter), manages passthrough state
+wined3d.dll ── qemu-3dfx module: registry config, HAL detection, host cursor,
+    |          ScaleWindow / DisplayROI / OverrideModeWidth / SwapInterval
     v
-opengl32.dll (qemu-3dfx wrapper) → mesapt → Host GPU
+opengl32.dll (qemu-3dfx wrapper) → host GPU
 ```
 
 ## Build
@@ -129,15 +181,17 @@ docker rm extract
 | C | 4.12.1, 5.0.5 | 4.12, 5.0 | tar.xz |
 | D | 6.0.4, 7.0.2, 8.0.2 | 6.0, 7.0, 8.0 | tar.xz |
 
-### Local Build (Linux with MinGW cross-compiler)
+### CI / MSYS2 (`build-ci.sh`)
 
-```bash
-bash build-ci.sh
+`build-ci.sh` is the build used by GitHub Actions
+(`.github/workflows/build.yml`): on `windows-latest` with MSYS2's i686 GCC it
+builds each version in its own matrix job, checks the imports
+(`docker/verify_imports.py`) and bundles all versions into one `wine-dlls-all`
+artifact. It applies the same Wine patches as the Dockerfile, including the
+call-site patcher. Locally it runs from an MSYS2 MINGW32 shell:
+
 ```
-
-### Options
-
-```
+bash build-ci.sh                        # all versions
 bash build-ci.sh --force                # rebuild all versions
 bash build-ci.sh --versions 1.8.7 6.0.4 # build specific versions
 ```
@@ -164,12 +218,15 @@ output/
 | Static CRITICAL_SECTION_DEBUG init | Runtime InitializeCriticalSection in wined3d_main.c |
 | Window class needs CS_OWNDC | Added CS_OWNDC flag to wined3d window class registration |
 | EXCEPTION_REGISTRATION_RECORD Prev vs Next | Copy Wine's exception.h, patch frame->Prev→frame->prev |
-| Vulkan backend not needed on Win98 | Stub all VK functions via vk_stubs.c |
+| Vulkan backend not needed on Win98 | Vulkan sources never linked; vk_stubs.c provides their entry points |
+| Wine-built msvcrt.dll shadows Win98's and imports symbols 98 lacks | No bundled msvcrt.dll (6.0.4 used to ship one); every version links against Win98's own MSVCRT |
+| wined3d's hidden windows use a DLL-registered class (found on Win9x only with the registering instance) | The DLL instance is passed as `CreateWindowA`'s `hInstance`, as the reference does |
 | vkd3d library (Wine 8.0+) not needed | Remove includes, callbacks, and debug channels from wined3d_main.c |
 | WGL query renderer extensions missing | Remove USE_GL_FUNC entries, null out supported[] blocks |
 | GL extension naming mismatch | Add EXT suffix (glPolygonOffsetClamp→EXT, GL_TEXTURE_MAX_ANISOTROPY→_EXT) |
 | Wine debug/log symbols in ddraw | Stub via libwine_stubs.c (atexit, wine_get_version, __wine_dbg_*) |
 | AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback |
+| D3DKMT (Vista+ gdi32) needed by Wine ≥1.9 | `d3dkmt_stubs.c`: surface/texture `GetDC` via `CreateCompatibleDC` + `CreateDIBSection` (copy-in/copy-back, as the reference); adapter/device calls succeed, `QueryVideoMemoryInfo` → `STATUS_NOT_IMPLEMENTED` (fake memory info) |
 | PE header incompatibility | patch_pe_win98.py post-processing |
 | Import name decorations | strip_import_decorations.py post-processing |
 
@@ -177,20 +234,30 @@ output/
 
 ```
 Dockerfile                    Docker build (all versions via WINE_VERSION arg)
-build-ci.sh                   Standalone build script (Linux)
-qemu3dfx_hooks.c              Passthrough hooks for wined3d (7 exports)
-qemu3dfx_ddraw_hooks.c        VidMem HAL stubs + COM helpers for ddraw (26 exports)
-qemu3dfx_ddraw_passthrough.c  ddraw → wined3d passthrough bridge + ddrawwq.dll switcher
+build-ci.sh                   Build script used by CI (MSYS2 on Windows)
+qemu3dfx_hooks.c              qemu-3dfx module for wined3d (8 exports + internal API, per-version)
+qemu3dfx_ddraw_hooks.c        ddraw exports: ddrawwq.dll forwarders + HAL export stubs
+qemu3dfx_ddthru.c             ddthru: per-call routing of the DirectDraw entry points
 docker/
+  qemu3dfx_callsites.py       Inserts the qemu-3dfx call sites into Wine source (all versions)
+  qemu3dfx.h, qemu3dfx_ddraw.h  Prototypes for the patched Wine sources
+  qemu3dfx_streaming_buffer.c Wine 8.0 streaming buffers backported to 7.x
   kernel32_compat.c           Win98-compatible stubs (security cookie, GetSystemTimeAsFileTime, etc.)
   copysign.c                  _copysign implementation
   nocrt_entry.c               Minimal DLL entry point (DllMainCRTStartup bypass)
   vk_stubs.c                  Vulkan stub functions (never called on Win98)
   libwine_stubs.c             Wine debug/log stubs for ddraw (atexit, wine_get_version, __wine_dbg_*)
-  d3dkmt_stubs.c              D3DKMT adapter enumeration stubs
+  d3dkmt_stubs.c              D3DKMT for Win9x: GDI-based DCs from memory, adapter/device stubs
   mingwex_stubs.c             MinGW math stubs
   patch_pe_win98.py           PE header patching for Win98
   strip_import_decorations.py Strip @N from PE import names
+tests/                        Host unit tests (make test) with Win32 mocks
+tests/emu/                    Emulator differential tests vs the qemu-3dfx reference DLLs (make test-emu)
+tools/
+  win98-universe.py           Win98 export universe + import checker
+  win98-calldiff.py           Disassemble two PEs and diff their calls / runtime lookups
+  build-verify.sh             Build one Wine version into output-verify/ without touching output/
+  re/                         Reverse-engineering helpers and CALLSITES.md (call-site map)
 wine9x-support/               Wine 1.7.55 build infrastructure
   Makefile                    Build system template (compiles all four DLLs)
   compact/                    Compatibility helpers (debug.c, exception.asm)
@@ -202,6 +269,20 @@ wine9x-support/               Wine 1.7.55 build infrastructure
   d3d8/                       d3d8 reference source
   d3d9/                       d3d9 reference source
 ```
+
+## Testing
+
+```sh
+make test        # host unit tests (no Windows/Wine needed; any C compiler)
+make test-emu    # differential tests vs the qemu-3dfx reference DLLs
+```
+
+`make test-emu` needs Python 3 with Unicorn, `i686-w64-mingw32-gcc`, and the
+reference DLLs extracted once with `tests/emu/extract-reference.sh` — see
+[`tests/emu/README.md`](tests/emu/README.md). For built DLLs,
+`tools/win98-universe.py check output/<ver>/*.dll` verifies every import
+against a stock Win98 SE system and `tools/win98-calldiff.py` compares calls
+with the reference build.
 
 ## Credits
 

@@ -55,7 +55,7 @@ COPY wine9x-support/d3d9/            /wine9x/d3d9/
 # ── Copy qemu-3dfx hooks + Win98 compat files ───────────────────────
 COPY qemu3dfx_hooks.c                /docker/qemu3dfx_hooks.c
 COPY qemu3dfx_ddraw_hooks.c          /docker/qemu3dfx_ddraw_hooks.c
-COPY qemu3dfx_ddraw_passthrough.c    /docker/qemu3dfx_ddraw_passthrough.c
+COPY qemu3dfx_ddthru.c               /docker/qemu3dfx_ddthru.c
 COPY docker/ /docker/
 
 # ── Layer 3: Build — version-aware, Win98-compatible ────────────────
@@ -173,6 +173,10 @@ RUN set -ex && \
     if ! grep -q '^#define WINED3DERR_DEVICELOST' /build/include/wine/wined3d.h; then \
       printf '\n#ifndef WINED3DERR_DEVICELOST\n#define WINED3DERR_DEVICELOST 0x88760868\n#endif\n' >> /build/include/wine/wined3d.h; \
     fi && \
+    if [ "$WINE_MAJ" -eq 7 ]; then \
+      true "=== Wine 7.x: add the Wine 8.0 streaming buffer API (qemu-3dfx backport) ===" && \
+      cat /docker/wined3d_streaming_buffer.h >> /build/include/wine/wined3d.h; \
+    fi && \
     \
     true "=== Win9x: keep W-version window procs (they work on Win98) ===" && \
     true "=== (DefWindowProcW, CallWindowProcW, Get/SetWindowLongW all exist) ===" && \
@@ -249,12 +253,17 @@ RUN set -ex && \
     true "=== Add WGL constants via wglext.h to all wined3d source files ===" && \
     find /build/wined3d -name '*.c' -exec grep -l 'wined3d_private\.h' {} \; | xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true && \
     \
+    true "=== qemu-3dfx call sites into Wine source (fails the build if an anchor moved) ===" && \
+    python3 /docker/qemu3dfx_callsites.py /build ${WINE_VERSION} && \
     true "=== Generate .def from Wine spec (add HAL stubs and COM exports for ddraw) ===" && \
     echo "EXPORTS" > /build/wined3d/wined3d.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
         grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore' >> /build/wined3d/wined3d.def && \
-    printf '  wined3d_surface_ddheap\n  wined3d_streaming_buffer_map\n  wined3d_streaming_buffer_unmap\n  wined3d_streaming_buffer_upload\n' >> /build/wined3d/wined3d.def && \
+    printf '  wined3d_surface_ddheap\n' >> /build/wined3d/wined3d.def && \
+    if [ "$WINE_MAJ" -eq 7 ]; then \
+      printf '  wined3d_streaming_buffer_map\n  wined3d_streaming_buffer_unmap\n  wined3d_streaming_buffer_upload\n' >> /build/wined3d/wined3d.def; \
+    fi && \
     echo "EXPORTS" > /build/ddraw/ddraw.def && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/ddraw/ddraw.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
@@ -272,11 +281,18 @@ RUN set -ex && \
     echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
     [ -f wined3d/adapter_gl.c ] && echo "wined3d_OBJS += wined3d/adapter_gl.c.o" >> Makefile || true && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
+    [ -f wined3d/adapter_vk.c ] && echo "wined3d_OBJS += wined3d/adapter_vk.c.o" >> Makefile || true && \
+    [ -f wined3d/context_vk.c ] && echo "wined3d_OBJS += wined3d/context_vk.c.o" >> Makefile || true && \
+    [ -f wined3d/shader_spirv.c ] && echo "wined3d_OBJS += wined3d/shader_spirv.c.o" >> Makefile || true && \
     echo "wined3d_OBJS += wined3d/d3dkmt_stubs.c.o" >> Makefile && \
+    if [ "$WINE_MAJ" -eq 7 ]; then \
+      cp /docker/qemu3dfx_streaming_buffer.c wined3d/qemu3dfx_streaming_buffer.c && \
+      echo "wined3d_OBJS += wined3d/qemu3dfx_streaming_buffer.c.o" >> Makefile; \
+    fi && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
     echo "wined3d_OBJS += /build/nocrt_entry.o" >> Makefile && \
     echo "wined3d_OBJS += /build/mingw_matherr_stubs.o" >> Makefile && \
-    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_passthrough.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
+    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddthru.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
     echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
     echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
     \
@@ -291,7 +307,7 @@ RUN set -ex && \
     \
     echo "=== Compile Win98 compat objects ===" && \
     CFLAGS_COMPAT="-std=c99 -O3 -fomit-frame-pointer -I/docker -Iinclude -Iinclude/wine -Imingw -Icompact -Ipthread9x/include -D_WIN32 -DWIN32 -D__WINESRC__ -DUSE_WIN32_OPENGL -DWINE_NOWINSOCK -DNDEBUG -DWINVER=0x0400 -DWINE_SILENT -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS -DDECLSPEC_HIDDEN= -D__USE_MINGW_ANSI_STDIO=0" && \
-    CFLAGS_HOOKS="-std=c99 -O3 -fomit-frame-pointer -D_WIN32 -DWIN32 -DNDEBUG -DWINVER=0x0400 -D__USE_MINGW_ANSI_STDIO=0" && \
+    CFLAGS_HOOKS="-std=c99 -O3 -fomit-frame-pointer -D_WIN32 -DWIN32 -DNDEBUG -DWINVER=0x0400 -D__USE_MINGW_ANSI_STDIO=0 -DQEMU3DFX_WINE_MAJOR=${WINE_MAJ} -DQEMU3DFX_WINE_MINOR=${WINE_MIN}" && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/kernel32_compat.o /docker/kernel32_compat.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/copysign.o /docker/copysign.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
@@ -304,35 +320,12 @@ RUN set -ex && \
     echo "=== Copy and pre-compile qemu-3dfx hooks ===" && \
     cp /docker/qemu3dfx_hooks.c wined3d/qemu3dfx_hooks.c && \
     cp /docker/qemu3dfx_ddraw_hooks.c ddraw/qemu3dfx_ddraw_hooks.c && \
-    cp /docker/qemu3dfx_ddraw_passthrough.c ddraw/qemu3dfx_ddraw_passthrough.c && \
+    cp /docker/qemu3dfx_ddthru.c ddraw/qemu3dfx_ddthru.c && \
     cp /docker/d3dkmt_stubs.c wined3d/d3dkmt_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/qemu3dfx_hooks.c.o wined3d/qemu3dfx_hooks.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -Iwined3d -c -o ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddraw_hooks.c && \
-    DDRAW_FLIP_DEF="" && \
-    if [ "$WINE_MAJ" -lt 4 ]; then \
-        DDRAW_FLIP_DEF="-DDDRAW_FLIP_CALL_FPSLIMIT"; \
-    elif [ "$WINE_MAJ" -ge 6 ]; then \
-        DDRAW_FLIP_DEF="-DDDRAW_FLIP_CALL_SURFACE_DDHEAP"; \
-    fi && \
-    i686-w64-mingw32-gcc $CFLAGS_HOOKS $DDRAW_FLIP_DEF -Iwined3d -Iddraw -c -o ddraw/qemu3dfx_ddraw_passthrough.c.o ddraw/qemu3dfx_ddraw_passthrough.c && \
+    i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o ddraw/qemu3dfx_ddthru.c.o ddraw/qemu3dfx_ddthru.c && \
     i686-w64-mingw32-gcc $CFLAGS_HOOKS -c -o wined3d/d3dkmt_stubs.c.o wined3d/d3dkmt_stubs.c && \
-    \
-    echo "=== Patch ddraw source for qemu-3dfx ===" && \
-    sed -i '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_passthrough_init(void);\
-extern BOOL qemu3dfx_ddraw_is_passthru(void);\
-extern HRESULT qemu3dfx_ddraw_create(GUID *, void **, IUnknown *);\
-extern HRESULT qemu3dfx_ddraw_create_ex(GUID *, void **, REFIID, IUnknown *);\
-extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/main.c && \
-    sed -i '/DisableThreadLibraryCalls(inst);/a\        qemu3dfx_ddraw_passthrough_init();' ddraw/main.c && \
-    perl -pi -e 'if (/^HRESULT WINAPI.*DirectDrawCreate\(GUID \*driver_guid, IDirectDraw/) { $in_ddc = 1; } if ($in_ddc && /^    wined3d_mutex_lock/) { $_ = "    if (qemu3dfx_ddraw_is_passthru())\n        return qemu3dfx_ddraw_create(driver_guid, (void **)ddraw, outer);\n\n" . $_; $in_ddc = 0; }' ddraw/main.c && \
-    perl -pi -e 'if (/^HRESULT WINAPI.*DirectDrawCreateEx\(/) { $in_ddce = 1; } if ($in_ddce && /^    wined3d_mutex_lock/) { $_ = "    if (qemu3dfx_ddraw_is_passthru())\n        return qemu3dfx_ddraw_create_ex(driver_guid, ddraw, interface_iid, outer);\n\n" . $_; $in_ddce = 0; }' ddraw/main.c && \
-    sed -i -e '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_cooplevel(DWORD *);' \
-           -e '/DDRAW_dump_cooperativelevel(cooplevel);/a\    qemu3dfx_ddraw_cooplevel(\&cooplevel);' ddraw/ddraw.c && \
-    sed -i '/#include "ddraw_private.h"/a\extern void qemu3dfx_ddraw_blit(void);\nextern void qemu3dfx_ddraw_flip(void);\nextern void qemu3dfx_ddraw_rtv(void *);' ddraw/surface.c && \
-    sed -i 's/return wined3d_texture_blt(dst_surface/qemu3dfx_ddraw_blit();\n    return wined3d_texture_blt(dst_surface/' ddraw/surface.c && \
-    sed -i 's/return wined3d_device_context_blt(ddraw/qemu3dfx_ddraw_blit();\n    return wined3d_device_context_blt(ddraw/' ddraw/surface.c && \
-    sed -i 's/\(DDSCAPS2\? caps = {DDSCAPS_FLIP.*\)/\1\n    qemu3dfx_ddraw_flip();/' ddraw/surface.c && \
-    sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' ddraw/surface.c && \
     \
     echo "=== Create config.mk ===" && \
     echo "CC      = i686-w64-mingw32-gcc" > config.mk && \
@@ -355,6 +348,17 @@ extern HRESULT qemu3dfx_ddraw_create_clipper(DWORD, void *, IUnknown *);' ddraw/
     true "=== Pre-compile Wine 6.0+ GL source files via make pattern rule ===" && \
     [ -f wined3d/adapter_gl.c ] && make wined3d/adapter_gl.c.o || true && \
     [ -f wined3d/context_gl.c ] && make wined3d/context_gl.c.o || true && \
+    [ -f wined3d/adapter_vk.c ] && make wined3d/adapter_vk.c.o || true && \
+    [ -f wined3d/context_vk.c ] && make wined3d/context_vk.c.o || true && \
+    [ -f wined3d/shader_spirv.c ] && make wined3d/shader_spirv.c.o || true && \
+    true "=== Vulkan sources are never linked: Win98 has no Vulkan; docker/vk_stubs.c provides the entry points ===" && \
+    for vk in adapter_vk context_vk shader_spirv; do \
+      sed -i "\\|wined3d_OBJS += wined3d/$vk.c.o|d" Makefile; \
+    done && \
+    if [ "$WINE_MAJ" -eq 7 ]; then \
+      true "=== Wine 7.x: compile the streaming buffer backport (must succeed) ===" && \
+      make wined3d/qemu3dfx_streaming_buffer.c.o; \
+    fi && \
     true "=== Link ddraw/d3d8/d3d9 with nocrt, wined3d with nocrt+msvcrt ===" && \
     sed -i '/ddraw_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -ladvapi32 $(DLLFLAGS_NOCRT)/' Makefile && \
     sed -i '/d3d8_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 $(DLLFLAGS_NOCRT)/' Makefile && \

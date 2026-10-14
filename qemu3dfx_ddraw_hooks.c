@@ -1,9 +1,20 @@
 /*
- * qemu-3dfx DirectDraw HAL stubs for Wine ddraw
+ * qemu-3dfx additions to Wine's ddraw.dll exports.
  *
- * Provides VidMem/HAL export stubs for the qemu-3dfx MESA OpenGL
- * passthrough layer.  These stubs satisfy the export table so the
- * wrapper and HAL enumeration can find them.
+ * Two groups, matching the reference ddraw.dll:
+ *
+ *   1. Real forwarders to the system DirectDraw (ddrawwq.dll):
+ *      DDInternalLock, DDInternalUnlock, D3DParseUnknownCommand,
+ *      CompleteCreateSysmemSurface, AcquireDDThreadLock, ReleaseDDThreadLock
+ *      (see the block comment further down).
+ *
+ *   2. DirectDraw HAL/VidMem exports that nothing implements: DDHAL32_*,
+ *      VidMem*, InternalLock/Unlock, HeapVidMemAllocAligned,
+ *      LateAllocateSurfaceMem, GetNextMipMap, DSoundHelp.  Upstream Wine
+ *      declares them "@ stub" and the reference build keeps those Wine spec
+ *      stubs, which raise an "unimplemented function" exception when called.
+ *      They exist so the export table matches; here they return 0/NULL
+ *      instead of raising.  There is no reference code to port for them.
  *
  * Build: this file is injected into the ddraw build.
  */
@@ -13,6 +24,7 @@
 #endif
 
 #include <windows.h>
+#include <string.h>
 
 /* DirectDraw HAL video memory allocation */
 DWORD WINAPI DDHAL32_VidMemAlloc(void *lpDD, int heap, DWORD dwWidth, DWORD dwHeight)
@@ -96,43 +108,134 @@ DWORD WINAPI VidMemLargestFree(void *lpHeap)
     return 0;
 }
 
-/* Internal surface lock (DD-prefixed) */
-long WINAPI DDInternalLock(void *lpDDSurface, void **ppBits, void *lpRect, DWORD dwFlags)
+/* ------------------------------------------------------------------ */
+/* Forwarders to the system DirectDraw (ddrawwq.dll)                   */
+/* ------------------------------------------------------------------ */
+/*
+ * qemu-3dfx's ddthru installer renames the system ddraw.dll to ddrawwq.dll.
+ * The reference ddraw.dll (8.0.2 build: table at 0x100330c0,
+ * loader at 0x1000dbdc, forwarders at 0x1000ee24..0x1000ef6b)
+ * loads it on first use, resolves twelve entry points, keeps them only if
+ * the six core DirectDraw exports are all present, and forwards these six
+ * exports to it, returning E_NOTIMPL when it is not available.
+ *
+ * Deliberate deviations (safer, documented):
+ *   - a missing optional export returns E_NOTIMPL instead of calling NULL;
+ *   - Acquire/ReleaseDDThreadLock fall back to the wined3d mutex (stock
+ *     Wine behaviour) when ddrawwq.dll is absent, instead of doing nothing.
+ */
+
+typedef HRESULT (WINAPI *PFN_DDInternalLock)(void *, void **);
+typedef HRESULT (WINAPI *PFN_DDInternalUnlock)(void *);
+typedef HRESULT (WINAPI *PFN_D3DParseUnknownCommand)(void *, void **);
+typedef HRESULT (WINAPI *PFN_CompleteCreateSysmemSurface)(void *);
+typedef void (WINAPI *PFN_DDThreadLock)(void);
+
+static struct
 {
-    return 0;
+    HMODULE module;
+    FARPROC DirectDrawCreate, DirectDrawCreateClipper, DirectDrawCreateEx;
+    FARPROC DirectDrawEnumerateA, DirectDrawEnumerateExA, GetSurfaceFromDC;
+    PFN_DDThreadLock AcquireDDThreadLock, ReleaseDDThreadLock;
+    PFN_DDInternalLock DDInternalLock;
+    PFN_DDInternalUnlock DDInternalUnlock;
+    PFN_D3DParseUnknownCommand D3DParseUnknownCommand;
+    PFN_CompleteCreateSysmemSurface CompleteCreateSysmemSurface;
+} ddrawwq;
+
+#define DDRAWWQ_PROC(name) (ddrawwq.name = (void *)GetProcAddress(ddrawwq.module, #name))
+
+static void ddrawwq_load(void)
+{
+    if (ddrawwq.module)
+        return;
+    if (!(ddrawwq.module = LoadLibraryA("ddrawwq.dll")))
+        return;
+
+    DDRAWWQ_PROC(DirectDrawCreate);
+    DDRAWWQ_PROC(DirectDrawCreateClipper);
+    DDRAWWQ_PROC(DirectDrawCreateEx);
+    DDRAWWQ_PROC(DirectDrawEnumerateA);
+    DDRAWWQ_PROC(DirectDrawEnumerateExA);
+    DDRAWWQ_PROC(GetSurfaceFromDC);
+    DDRAWWQ_PROC(AcquireDDThreadLock);
+    DDRAWWQ_PROC(ReleaseDDThreadLock);
+    DDRAWWQ_PROC(DDInternalLock);
+    DDRAWWQ_PROC(DDInternalUnlock);
+    DDRAWWQ_PROC(D3DParseUnknownCommand);
+    DDRAWWQ_PROC(CompleteCreateSysmemSurface);
+
+    if (!ddrawwq.DirectDrawCreate || !ddrawwq.DirectDrawCreateEx
+            || !ddrawwq.DirectDrawCreateClipper || !ddrawwq.GetSurfaceFromDC
+            || !ddrawwq.DirectDrawEnumerateA || !ddrawwq.DirectDrawEnumerateExA)
+    {
+        /* not a usable DirectDraw: forget it entirely (reference 0x1000dba1) */
+        FreeLibrary(ddrawwq.module);
+        memset(&ddrawwq, 0, sizeof(ddrawwq));
+    }
 }
 
-/* Internal surface unlock (DD-prefixed) */
-long WINAPI DDInternalUnlock(void *lpDDSurface, void *lpSurfaceData, DWORD dwFlags)
+/* For qemu3dfx_ddthru.c: the loaded system DirectDraw table, or NULL.  Its
+ * first seven fields are the layout struct ddrawwq_table there expects. */
+void *qemu3dfx_ddrawwq_table(void)
 {
-    return 0;
+    ddrawwq_load();
+    return ddrawwq.module ? (void *)&ddrawwq : NULL;
 }
 
-/* Acquire DirectDraw thread lock */
+#define E_NOTIMPL_ ((HRESULT)0x80004001L)
+
+HRESULT WINAPI DDInternalLock(void *surface_lcl, void **bits)
+{
+    ddrawwq_load();
+    if (!ddrawwq.module || !ddrawwq.DDInternalLock)
+        return E_NOTIMPL_;
+    return ddrawwq.DDInternalLock(surface_lcl, bits);
+}
+
+HRESULT WINAPI DDInternalUnlock(void *surface_lcl)
+{
+    ddrawwq_load();
+    if (!ddrawwq.module || !ddrawwq.DDInternalUnlock)
+        return E_NOTIMPL_;
+    return ddrawwq.DDInternalUnlock(surface_lcl);
+}
+
+HRESULT WINAPI D3DParseUnknownCommand(void *command, void **next_command)
+{
+    ddrawwq_load();
+    if (!ddrawwq.module || !ddrawwq.D3DParseUnknownCommand)
+        return E_NOTIMPL_;
+    return ddrawwq.D3DParseUnknownCommand(command, next_command);
+}
+
+HRESULT WINAPI CompleteCreateSysmemSurface(void *surface_lcl)
+{
+    ddrawwq_load();
+    if (!ddrawwq.module || !ddrawwq.CompleteCreateSysmemSurface)
+        return E_NOTIMPL_;
+    return ddrawwq.CompleteCreateSysmemSurface(surface_lcl);
+}
+
 extern void WINAPI wined3d_mutex_lock(void);
+extern void WINAPI wined3d_mutex_unlock(void);
+
 void WINAPI AcquireDDThreadLock(void)
 {
-    wined3d_mutex_lock();
+    ddrawwq_load();
+    if (ddrawwq.module && ddrawwq.AcquireDDThreadLock)
+        ddrawwq.AcquireDDThreadLock();
+    else
+        wined3d_mutex_lock();
 }
 
-/* Release DirectDraw thread lock */
-extern void WINAPI wined3d_mutex_unlock(void);
 void WINAPI ReleaseDDThreadLock(void)
 {
-    wined3d_mutex_unlock();
-}
-
-/* Complete creation of a system memory surface */
-long WINAPI CompleteCreateSysmemSurface(void *lpDDSurface)
-{
-    return 0;
-}
-
-/* Parse unknown D3D command */
-long WINAPI D3DParseUnknownCommand(void *lpCmd, void **lpRetCmd)
-{
-    if (lpRetCmd) *lpRetCmd = lpCmd;
-    return 0x8876086A; /* D3DERR_COMMAND_UNPARSED */
+    ddrawwq_load();
+    if (ddrawwq.module && ddrawwq.ReleaseDDThreadLock)
+        ddrawwq.ReleaseDDThreadLock();
+    else
+        wined3d_mutex_unlock();
 }
 
 /* COM exports removed from Wine 7.0+ ddraw */

@@ -1,356 +1,379 @@
 /*
- * Unit tests for qemu3dfx_hooks.c
+ * Host unit tests for qemu3dfx_hooks.c (the qemu-3dfx wined3d module).
  *
- * Compiled on Linux by providing mock Windows types (tests/include/windows.h)
- * and mock kernel32 implementations (tests/mock_win32.c).
+ * Compiled natively with mock Windows types/APIs (tests/include/windows.h,
+ * tests/mock_win32.c), once per behaviour family:
+ *   make test        -> tests/run_test_hooks (Wine 8.0 behaviour) and
+ *                       tests/run_test_hooks_1_8 (Wine 1.8 behaviour)
  *
- * Compile + run:
- *   make tests/run_test_hooks && tests/run_test_hooks
- *
- * IMPORTANT: test_hal_3dfx_not_detected() MUST run first because
- * wined3d_hal_3dfx() contains unclearable function-local statics.
+ * Expected values are the reference semantics (qemu-3dfx)
+ * that tests/emu/test_module.py checks against the original machine code;
+ * this suite is the fast, dependency-free regression net for them.
  */
 #include "include/windows.h"
 #include <stdio.h>
 #include <string.h>
+#include "mock_win32.h"
 
-/* External mock state (defined in mock_win32.c) */
-extern int    mock_qemuchs_accessible;
-extern HANDLE mock_opengl32_handle;
+#ifndef QEMU3DFX_WINE_MAJOR
+#define QEMU3DFX_WINE_MAJOR 8
+#define QEMU3DFX_WINE_MINOR 0
+#endif
 
 /* ── Pull in the unit under test ─────────────────────────────────── */
 #include "../qemu3dfx_hooks.c"
 
 /* ── Minimal test framework ──────────────────────────────────────── */
-static int g_tests_passed = 0;
-static int g_tests_failed = 0;
+static int g_passed, g_failed;
 
-#define ASSERT(expr, msg) \
-    do { \
-        if ((expr)) { \
-            g_tests_passed++; \
-        } else { \
-            fprintf(stderr, "FAIL [%s:%d]: %s\n", __FILE__, __LINE__, (msg)); \
-            g_tests_failed++; \
-        } \
+#define ASSERT_EQ(actual, expected, msg) do { \
+        unsigned long long a_ = (unsigned long long)(actual), e_ = (unsigned long long)(expected); \
+        if (a_ == e_) g_passed++; \
+        else { fprintf(stderr, "FAIL [%s:%d] %s: got %#llx, expected %#llx\n", \
+                       __FILE__, __LINE__, (msg), a_, e_); g_failed++; } \
     } while (0)
+#define ASSERT(expr, msg) ASSERT_EQ(!!(expr), 1, msg)
 
-/* Reset all module-level globals (does NOT reset function-local statics
- * inside wined3d_hal_3dfx — run that test first with QEMUchs absent). */
-static void reset_state(void)
+static __typeof__(cfg) cfg_defaults;
+
+/* back to "fresh process": mocks, config, and every module static */
+static void reset(void)
 {
-    qemu3dfx_detected         = FALSE;
-    hal_enum_done             = FALSE;
-    ddheap_active             = FALSE;
-    passthru_enabled          = FALSE;
-    override_counter          = (DWORD)-1;
-    override_trigger          = (DWORD)-1;
-    blit_frame_count          = 0;
-    flip_frame_count          = 0;
-    p_wglGetDeviceGammaRamp3DFX = NULL;
-    p_wglSetDeviceGammaRamp3DFX = NULL;
-    p_wglSetDeviceCursor3DFX    = NULL;
-    mock_qemuchs_accessible   = 0;
-    mock_opengl32_handle      = NULL;
+    mock_reset();
+    cfg = cfg_defaults;
+    cfg_loaded = 0;
+    passthru_flag = 0;
+    fps_next_tick = 0;
+    memset(latch, 0, sizeof(latch));
+    cursor_last_tick = 0;
+    cursor_last.x = cursor_last.y = 0;
+    cursor_procs_resolved = FALSE;
+    p_wglSetDeviceCursor3DFX = NULL;
+    p_glDebugMessageInsertARB = NULL;
 }
 
-/* ── Tests ───────────────────────────────────────────────────────── */
+/* ── Configuration ───────────────────────────────────────────────── */
 
-/* Must run first: exercises wined3d_hal_3dfx() while its local statics
- * are in the initial (unchecked) state. */
-static void test_hal_3dfx_not_detected(void)
+static void test_defaults(void)
 {
-    reset_state();
-    mock_qemuchs_accessible = 0;
-
-    ASSERT(wined3d_hal_3dfx() == FALSE,
-           "hal_3dfx: returns FALSE when QEMUchs absent");
-
-    /* Second call must return the cached result, not re-probe. */
-    ASSERT(wined3d_hal_3dfx() == FALSE,
-           "hal_3dfx: subsequent call returns cached FALSE");
-
-    /* Side-effect flags must remain unset when not detected. */
-    ASSERT(hal_enum_done    == FALSE, "hal_3dfx: hal_enum_done not set when undetected");
-    ASSERT(ddheap_active    == FALSE, "hal_3dfx: ddheap_active not set when undetected");
-    ASSERT(passthru_enabled == FALSE, "hal_3dfx: passthru_enabled not set when undetected");
+    reset();
+    ASSERT_EQ(wined3d_hal_3dfx(), FALSE, "hal_3dfx default for GAME.EXE");
+    ASSERT_EQ(wined3d_enum_hal_last(), TRUE, "enum_hal_last defaults on");
+    ASSERT_EQ(wined3d_surface_ddheap(), TRUE, "DDSurfaceHeap defaults on");
+    ASSERT_EQ(qemu3dfx_use_last_context_tid(), QEMU3DFX_WINE_MAJOR >= 8,
+              "UseLastContextTid default (on from 8.0)");
+    ASSERT_EQ(qemu3dfx_scale_window_value(), 0xffffffff, "ScaleWindow unset");
 }
 
-static void test_detect_qemu_passthrough(void)
+static void test_hal_3dfx_exe_list(void)
 {
-    reset_state();
-
-    mock_qemuchs_accessible = 0;
-    ASSERT(detect_qemu_passthrough() == FALSE,
-           "detect_passthrough: returns FALSE when device absent");
-
-    mock_qemuchs_accessible = 1;
-    ASSERT(detect_qemu_passthrough() == TRUE,
-           "detect_passthrough: returns TRUE when device present");
+    static const struct { const char *exe; BOOL hal; } cases[] = {
+        { "C:\\GAMES\\DS9\\ds9dw.exe", TRUE },
+        { "C:\\GAMES\\DS9\\DS9DW.EXE", TRUE },          /* case-insensitive */
+        { "C:/WEIRD/ds9dw.exe", TRUE },                  /* forward slashes */
+        { "C:\\KONAMI\\Silent Hill 4.exe", FALSE },      /* not in the HAL list */
+        { "C:\\GAMES\\ds9dw.exe.bak", FALSE },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        reset();
+        mock_exe_path = cases[i].exe;
+        ASSERT_EQ(wined3d_hal_3dfx(), cases[i].hal, cases[i].exe);
+    }
 }
 
-static void test_ensure_detected(void)
+static void test_registry_strings(void)
 {
-    reset_state();
-    mock_qemuchs_accessible = 1;
+    reset(); mock_reg_def_str("D3D1Hal3Dfx", "enabled");
+    ASSERT_EQ(wined3d_hal_3dfx(), TRUE, "D3D1Hal3Dfx=enabled");
 
-    ensure_detected();
-    ASSERT(qemu3dfx_detected == TRUE,
-           "ensure_detected: sets qemu3dfx_detected when device present");
+    reset(); mock_reg_def_str("D3D1Hal3Dfx", "Enabled");
+    ASSERT_EQ(wined3d_hal_3dfx(), FALSE, "string compare is case-sensitive");
 
-    /* Second call: already detected, must not re-probe. */
-    mock_qemuchs_accessible = 0;
-    ensure_detected();
-    ASSERT(qemu3dfx_detected == TRUE,
-           "ensure_detected: does not clear flag on second call");
+    reset(); mock_reg_def_dword("D3D1Hal3Dfx", 1);
+    ASSERT_EQ(wined3d_hal_3dfx(), FALSE, "REG_DWORD ignored for string keys");
+
+    reset(); mock_reg_def_str("D3D1EnumHalLast", "disabled");
+    ASSERT_EQ(wined3d_enum_hal_last(), FALSE, "D3D1EnumHalLast=disabled");
+
+    reset(); mock_reg_def_str("DDSurfaceHeap", "disabled");
+    ASSERT_EQ(wined3d_surface_ddheap(), QEMU3DFX_WINE_MAJOR >= 6 ? FALSE : TRUE,
+              "DDSurfaceHeap=disabled (read from 6.0)");
+
+    reset(); mock_reg_def_str("UseLastContextTid", "enabled");
+    ASSERT_EQ(qemu3dfx_use_last_context_tid(), TRUE, "UseLastContextTid=enabled");
+
+    reset(); mock_reg_def_str("UseLastContextTid", "disabled");
+    ASSERT_EQ(qemu3dfx_use_last_context_tid(), FALSE, "UseLastContextTid=disabled");
 }
 
-static void test_ensure_detected_not_present(void)
+static void test_registry_app_overrides(void)
 {
-    reset_state();
-    mock_qemuchs_accessible = 0;
+    reset();
+    mock_reg_def_str("D3D1Hal3Dfx", "enabled");
+    mock_reg_def_dword("ScaleWindow", 0x01000100);
+    mock_reg_app_str("D3D1Hal3Dfx", "disabled");
+    mock_reg_app_dword("ScaleWindow", 0x02800 << 4);
+    ASSERT_EQ(wined3d_hal_3dfx(), FALSE, "AppDefaults string wins over global");
+    ASSERT_EQ(qemu3dfx_scale_window_value(), 0x02800 << 4, "AppDefaults DWORD wins");
 
-    ensure_detected();
-    ASSERT(qemu3dfx_detected == FALSE,
-           "ensure_detected: qemu3dfx_detected remains FALSE when device absent");
+    reset();
+    mock_reg_app_str("D3D1Hal3Dfx", "enabled");
+    ASSERT_EQ(wined3d_hal_3dfx(), TRUE, "AppDefaults alone");
 }
 
-static void test_enum_hal_last(void)
-{
-    reset_state();
-    ASSERT(wined3d_enum_hal_last() == FALSE, "enum_hal_last: initially FALSE");
-
-    hal_enum_done = TRUE;
-    ASSERT(wined3d_enum_hal_last() == TRUE,  "enum_hal_last: returns TRUE after flag set");
-}
-
-static void test_surface_ddheap(void)
-{
-    reset_state();
-    ASSERT(wined3d_surface_ddheap() == FALSE, "surface_ddheap: initially FALSE");
-
-    ddheap_active = TRUE;
-    ASSERT(wined3d_surface_ddheap() == TRUE,  "surface_ddheap: returns TRUE after flag set");
-}
+/* ── Exports ─────────────────────────────────────────────────────── */
 
 static void test_passthru(void)
 {
-    reset_state();
-
-    /* NULL arg — must not set the flag */
-    ASSERT(wined3d_passthru(NULL) == FALSE,
-           "passthru: NULL arg returns FALSE and does not enable");
-    ASSERT(passthru_enabled == FALSE,
-           "passthru: flag still FALSE after NULL arg");
-
-    /* FALSE arg — must not set the flag */
-    BOOL disable = FALSE;
-    ASSERT(wined3d_passthru(&disable) == FALSE,
-           "passthru: FALSE arg returns FALSE and does not enable");
-    ASSERT(passthru_enabled == FALSE,
-           "passthru: flag still FALSE after FALSE arg");
-
-    /* TRUE arg — must set the flag */
-    BOOL enable = TRUE;
-    ASSERT(wined3d_passthru(&enable) == TRUE,
-           "passthru: TRUE arg enables and returns TRUE");
-    ASSERT(passthru_enabled == TRUE,
-           "passthru: flag is TRUE after TRUE arg");
-
-    /* NULL after enable — must return the current state (TRUE) */
-    ASSERT(wined3d_passthru(NULL) == TRUE,
-           "passthru: NULL arg after enable returns TRUE");
+    BOOL v;
+    reset();
+    ASSERT_EQ(wined3d_passthru(NULL), FALSE, "initially off");
+    v = TRUE;  ASSERT_EQ(wined3d_passthru(&v), TRUE, "enable");
+    ASSERT_EQ(wined3d_passthru(NULL), TRUE, "query keeps state");
+    v = FALSE; ASSERT_EQ(wined3d_passthru(&v), FALSE, "disable");
+    v = 7;     ASSERT_EQ(wined3d_passthru(&v), TRUE, "non-zero normalised to 1");
+    ASSERT_EQ(qemu3dfx_passthru_active(), TRUE, "core accessor");
 }
 
-static void test_override_cooplevel_sentinel(void)
+static void test_override_cooplevel(void)
 {
-    reset_state();
-    /* override_counter == (DWORD)-1 → must be a no-op */
-    DWORD level = 0x08;
-    wined3d_override_cooplevel(&level);
-    ASSERT(level == 0x08,
-           "override_cooplevel: no-op when counter is sentinel");
+    DWORD v;
+
+    reset(); v = 0x8;
+    wined3d_override_cooplevel(&v);
+    ASSERT_EQ(v, 0x8, "unchanged without OverrideCoopFullscreen");
+
+    reset(); mock_reg_def_dword("OverrideCoopFullscreen", 1); mock_reg_def_dword("ScaleWindow", 0x028001e0);
+    v = 0x8; wined3d_override_cooplevel(&v);
+    ASSERT_EQ(v, 0x8 ^ 0x11, "Coop=1 + ScaleWindow: toggle FULLSCREEN and NOWINDOWCHANGES");
+
+    reset(); mock_reg_def_dword("OverrideCoopFullscreen", 0); mock_reg_def_dword("ScaleWindow", 0x028001e0);
+    v = 0x11; wined3d_override_cooplevel(&v);
+    ASSERT_EQ(v, 0x10, "Coop=0 + ScaleWindow: toggle FULLSCREEN only");
+
+    reset(); mock_reg_def_dword("OverrideCoopFullscreen", 1);
+    v = 0; wined3d_override_cooplevel(&v);
+    ASSERT_EQ(v, 0x10, "Coop=1 without ScaleWindow: toggle NOWINDOWCHANGES only");
 }
 
-static void test_override_cooplevel_decrement_no_trigger(void)
+static void test_override_rendertarget_view(void)
 {
-    reset_state();
-    override_counter = 3;
-    override_trigger = (DWORD)-1;   /* sentinel = no trigger */
+    DWORD resource[32];
+    char *view[2];
+    const unsigned off = RESOURCE_RT_OFFSET / 4;
+    const DWORD bit = QEMU3DFX_WINE_MAJOR >= 4 ? 0x20 : 0x1;
 
-    DWORD level = 0x08;
-    wined3d_override_cooplevel(&level);
+    reset();
+    wined3d_override_rendertarget_view(NULL);            /* must not crash */
 
-    ASSERT(override_counter == 2,
-           "override_cooplevel: counter decremented from 3 to 2");
-    ASSERT(level == 0x08,
-           "override_cooplevel: level unchanged when trigger is sentinel and counter > 1");
-}
-
-static void test_override_cooplevel_reaches_zero(void)
-{
-    reset_state();
-    override_counter = 1;
-    override_trigger = (DWORD)-1;
-
-    DWORD level = 0x08;
-    wined3d_override_cooplevel(&level);
-
-    ASSERT(override_counter == 0,
-           "override_cooplevel: counter decremented to 0");
-    ASSERT(level == (0x08 ^ 0x10),
-           "override_cooplevel: 0x10 XORed when counter reaches 0");
-}
-
-static void test_override_cooplevel_with_trigger(void)
-{
-    reset_state();
-    override_counter = 3;
-    override_trigger = 5;   /* not sentinel → flags = 0x10 */
-
-    DWORD level = 0x08;
-    wined3d_override_cooplevel(&level);
-
-    ASSERT(override_counter == 2,
-           "override_cooplevel: counter decremented with trigger set");
-    ASSERT(level == (0x08 ^ 0x10),
-           "override_cooplevel: 0x10 XORed when trigger is not sentinel");
-}
-
-static void test_override_rendertarget_view_null(void)
-{
-    reset_state();
-    /* Must not crash on NULL. */
-    wined3d_override_rendertarget_view(NULL);
-    ASSERT(1, "override_rtv: NULL view pointer does not crash");
-}
-
-static void test_override_rendertarget_view_null_resource(void)
-{
-    reset_state();
-    /* view[1] (resource ptr) is NULL — must not crash. */
-    void *view[2] = { (void *)0xDEADBEEFUL, NULL };
-    wined3d_override_rendertarget_view(view);
-    ASSERT(1, "override_rtv: NULL resource pointer does not crash");
-}
-
-static void test_override_rendertarget_view_sets_flag(void)
-{
-    reset_state();
-    /* Allocate a dummy resource large enough for offset 0x34 + sizeof(DWORD). */
-    static unsigned char resource[0x50];
     memset(resource, 0, sizeof(resource));
-
-    void *view[2] = { (void *)0xDEADBEEFUL, resource };
+    view[0] = NULL; view[1] = (char *)resource;
     wined3d_override_rendertarget_view(view);
-
-    DWORD *flags = (DWORD *)(resource + 0x34);
-    ASSERT((*flags & 0x20) != 0,
-           "override_rtv: bit 0x20 set in resource->access_flags");
+    ASSERT_EQ(resource[off], bit, "render-target bit set at version offset");
+    resource[off] = 0x200;
+    wined3d_override_rendertarget_view(view);
+    ASSERT_EQ(resource[off], 0x200 | bit, "other bits preserved");
+    wined3d_override_rendertarget_view(view);
+    ASSERT_EQ(resource[off], 0x200 | bit, "idempotent");
 }
 
-static void test_override_rendertarget_view_idempotent(void)
+static void test_fps_limits(void)
 {
-    reset_state();
-    static unsigned char resource[0x50];
-    memset(resource, 0, sizeof(resource));
-
-    void *view[2] = { (void *)0xDEADBEEFUL, resource };
-    wined3d_override_rendertarget_view(view);
-
-    DWORD *flags   = (DWORD *)(resource + 0x34);
-    DWORD before   = *flags;
-
-    wined3d_override_rendertarget_view(view);
-    ASSERT(*flags == before,
-           "override_rtv: idempotent — second call does not change flags");
-}
-
-static void test_blit_fpslimit(void)
-{
-    reset_state();
-    ASSERT(blit_frame_count == 0,
-           "blit_fpslimit: counter starts at 0");
-
-    ASSERT(wined3d_blit_fpslimit() == TRUE,
-           "blit_fpslimit: returns TRUE");
-    ASSERT(blit_frame_count == 1,
-           "blit_fpslimit: counter incremented to 1");
-
+    /* BlitFpsLimit uses the low byte, FlipFpsLimit the low 7 bits */
+    reset();
+    mock_reg_def_dword("BlitFpsLimit", 0x1ff);           /* -> 255 fps -> 3 ms */
+    mock_reg_def_dword("FlipFpsLimit", 0xff);            /* -> 127 fps -> 7 ms */
+    mock_clock[0] = 1000; mock_clock[1] = 1000; mock_clock_len = 2;
     wined3d_blit_fpslimit();
-    ASSERT(blit_frame_count == 2,
-           "blit_fpslimit: counter incremented to 2 on second call");
-}
+    ASSERT_EQ(fps_next_tick, 1003, "blit: next slot = now + 1000/255");
+    ASSERT_EQ(mock_sleep_calls, 0, "blit: no wait on first frame");
 
-static void test_flip_fpslimit(void)
-{
-    reset_state();
-    ASSERT(flip_frame_count == 0,
-           "flip_fpslimit: counter starts at 0");
-
-    ASSERT(wined3d_flip_fpslimit() == TRUE,
-           "flip_fpslimit: returns TRUE");
-    ASSERT(flip_frame_count == 1,
-           "flip_fpslimit: counter incremented to 1");
-
+    mock_clock[2] = 1001; mock_clock[3] = 1002; mock_clock[4] = 1003; mock_clock[5] = 1003;
+    mock_clock_len = 6;
     wined3d_flip_fpslimit();
-    ASSERT(flip_frame_count == 2,
-           "flip_fpslimit: counter incremented to 2 on second call");
+    ASSERT_EQ(mock_sleep_calls, 2, "flip: spins until the slot");
+    ASSERT_EQ(fps_next_tick, 1003 + 7, "flip: next slot = now + 1000/127");
+
+    reset();
+    mock_reg_def_dword("BlitFpsLimit", 0x100);           /* low byte 0 -> off */
+    wined3d_blit_fpslimit();
+    ASSERT_EQ(mock_clock_pos, 0, "limit 0: clock not even read");
 }
 
-static void test_gamma_ramp_no_extension(void)
+/* ── Internal API ────────────────────────────────────────────────── */
+
+static void test_display_roi(void)
 {
-    reset_state();
-    /* Extension function pointers are NULL → must return FALSE. */
-    ASSERT(wined3d_get_gamma_ramp_3dfx(NULL, NULL) == FALSE,
-           "get_gamma_ramp_3dfx: returns FALSE without extension loaded");
-    ASSERT(wined3d_set_gamma_ramp_3dfx(NULL, NULL) == FALSE,
-           "set_gamma_ramp_3dfx: returns FALSE without extension loaded");
-    ASSERT(wined3d_set_cursor_3dfx(NULL, NULL) == FALSE,
-           "set_cursor_3dfx: returns FALSE without extension loaded");
+    RECT r = { 0, 0, 640, 480 };
+    reset();
+    qemu3dfx_display_roi(&r);
+    ASSERT(r.left == 0 && r.top == 0 && r.right == 640 && r.bottom == 480, "ROI unset: unchanged");
+
+    reset(); mock_reg_def_dword("DisplayROI", 0x00100020);  /* x margin 0x10, y margin 0x20 */
+    qemu3dfx_display_roi(&r);
+    ASSERT(r.left == 16 && r.right == 624 && r.top == 32 && r.bottom == 448, "ROI applied");
 }
 
-static void test_registry_key_strings(void)
+static void test_override_mode(void)
 {
-    ASSERT(strcmp(qemu3dfx_hal_key,          "D3D1Hal3Dfx")     == 0,
-           "registry: qemu3dfx_hal_key == 'D3D1Hal3Dfx'");
-    ASSERT(strcmp(qemu3dfx_enum_hal_last_key, "D3D1EnumHalLast") == 0,
-           "registry: qemu3dfx_enum_hal_last_key == 'D3D1EnumHalLast'");
+    DEVMODEA dm;
+#define MODE(w, h, b) (memset(&dm, 0, sizeof(dm)), dm.dmPelsWidth = (w), dm.dmPelsHeight = (h), dm.dmBitsPerPel = (b))
+
+    reset(); MODE(640, 480, 32);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), FALSE, "unset: no change");
+
+    reset(); mock_reg_def_dword("OverrideModeWidth", 800); MODE(640, 480, 32);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), TRUE, "width only: changed");
+    ASSERT(dm.dmPelsWidth == 800 && dm.dmPelsHeight == 600 && dm.dmBitsPerPel == 32, "aspect kept");
+
+    reset(); mock_reg_def_dword("OverrideModeWidth", 0x028001e0); MODE(800, 600, 32);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), TRUE, "packed w:h");
+    ASSERT(dm.dmPelsWidth == 640 && dm.dmPelsHeight == 480, "packed w:h applied");
+
+    reset(); mock_reg_def_dword("OverrideModeWidth", 640); MODE(640, 480, 32);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), FALSE, "same size, 32 bpp: no change");
+
+    reset(); mock_reg_def_dword("OverrideModeWidth", 640); MODE(640, 480, 8);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), TRUE, "below 16 bpp forced");
+    ASSERT_EQ(dm.dmBitsPerPel, 16, "-> 16 bpp");
+
+    reset(); mock_reg_def_dword("OverrideModeWidth", 0x80000280); MODE(640, 480, 32);
+    ASSERT_EQ(qemu3dfx_override_mode(&dm), TRUE, "sign bit forces 16 bpp");
+    ASSERT_EQ(dm.dmBitsPerPel, 16, "sign bit -> 16 bpp");
+#undef MODE
 }
 
-static void test_wgl_extension_string(void)
+static void test_swap_interval(void)
 {
-    ASSERT(strcmp(wgl_3dfx_gamma_control, "WGL_3DFX_gamma_control") == 0,
-           "wgl: gamma control extension string is 'WGL_3DFX_gamma_control'");
+    int v = 1;
+    reset(); qemu3dfx_swap_interval(&v);
+    ASSERT_EQ(v, 1, "unset: unchanged");
+    reset(); mock_reg_def_dword("SwapInterval", 0); qemu3dfx_swap_interval(&v);
+    ASSERT_EQ(v, 0, "override to 0");
 }
 
-/* ── Main ────────────────────────────────────────────────────────── */
+static void test_scale_window(void)
+{
+    RECT w = { 9, 9, 9, 9 }, s = { 9, 9, 9, 9 };
+    DWORD mode = 7;
+
+    reset();
+    ASSERT_EQ(qemu3dfx_scale_window(&w, &s, &mode), FALSE, "unset: FALSE");
+    ASSERT(w.left == 9 && mode == 7, "unset: untouched");
+
+    reset(); mock_reg_def_dword("ScaleWindow", 0x828001e0);
+    ASSERT_EQ(qemu3dfx_scale_window(&w, &s, &mode), TRUE, "set: TRUE");
+    ASSERT(w.left == 0 && w.right == 0x280 && w.bottom == 0x01e0, "window size from packed value");
+    ASSERT(s.left == 0 && s.top == 0 && s.right == 1024 && s.bottom == 768, "screen rect");
+    ASSERT_EQ(mode, 2, "sign bit -> mode 2");
+    ASSERT_EQ(qemu3dfx_scale_window(NULL, NULL, NULL), TRUE, "NULL args allowed");
+}
+
+static void test_latches(void)
+{
+    reset();
+    ASSERT_EQ(qemu3dfx_latch0(0), 0, "empty");
+    ASSERT_EQ(qemu3dfx_latch0(0x10000000), 0x10000000, "store");
+    ASSERT_EQ(qemu3dfx_latch0(0), 0x10000000, "0 keeps value");
+    ASSERT_EQ(qemu3dfx_latch1(0), 0, "independent");
+}
+
+static void test_is_qemu_bochs(void)
+{
+    static const struct { const char *s; BOOL r; } cases[] = {
+        { "QEMU Bochs Compatible VGA", TRUE }, { "QEMU Bochs", TRUE },
+        { "QEMU bochs", FALSE }, { "QEMU", FALSE }, { "Standard VGA", FALSE }, { NULL, FALSE },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        reset(); mock_adapter = cases[i].s;
+        ASSERT_EQ(qemu3dfx_is_qemu_bochs(), cases[i].r, cases[i].s ? cases[i].s : "(no adapter)");
+    }
+}
+
+static void test_cursor_channel(void)
+{
+    reset();
+    qemu3dfx_set_host_cursor((HCURSOR)0xc0ffee);
+    ASSERT_EQ(mock_set_cursor_calls, 1, "set_host_cursor on QEMU");
+    ASSERT_EQ((uintptr_t)mock_set_cursor_last, 0xc0ffee, "cursor handle passed through");
+
+    reset(); mock_adapter = "Standard VGA";
+    qemu3dfx_set_host_cursor((HCURSOR)1);
+    ASSERT_EQ(mock_set_cursor_calls, 0, "no host cursor off QEMU");
+
+    /* window (10,20)-(650,520), client 632x474: frame = 500-474 = 26;
+       cursor (100,200) -> y 174 -> scaled to 1024x768:
+       x = MulDiv(100, 1023, 639) = 160, y = MulDiv(174, 767, 499) = 267 */
+    reset();
+    mock_clock[0] = 1000; mock_clock_len = 1;
+    qemu3dfx_cursor_sync((HWND)1);
+    ASSERT_EQ(mock_debug_msg_calls, 1, "position sent on change");
+    ASSERT_EQ(mock_debug_msg_payload, (160u << 16) | 267u, "packed x/y");
+    ASSERT(mock_debug_msg_args[0] == 0x8247 && mock_debug_msg_args[1] == 0x8251 &&
+           mock_debug_msg_args[2] == 0x9148 && mock_debug_msg_args[3] == 0xffffffff &&
+           mock_debug_msg_args[4] == 4, "magic glDebugMessageInsertARB arguments");
+    ASSERT_EQ(mock_set_cursor_calls, 1, "cursor image sent with position");
+
+    mock_clock[1] = 1005; mock_clock_len = 2;            /* < 16 ms later */
+    mock_cursor.ptScreenPos.x = 300;
+    qemu3dfx_cursor_sync((HWND)1);
+    ASSERT_EQ(mock_debug_msg_calls, 1, "rate-limited to 16 ms");
+
+    mock_clock[2] = 1100; mock_clock_len = 3;
+    mock_cursor.flags = 0;                               /* hidden */
+    qemu3dfx_cursor_sync((HWND)1);
+    ASSERT_EQ(mock_debug_msg_calls, 2, "hide sent");
+    ASSERT_EQ(mock_debug_msg_payload, 0, "hidden -> 0,0");
+}
+
+static void test_sysmem_quirk(void)
+{
+    LONG count;
+
+    reset(); mock_quartz_loaded = 1; mock_exe_path = "C:\\KONAMI\\SH4\\Silent Hill 4.exe";
+    count = 1; qemu3dfx_sysmem_count_quirk(0x12, &count);
+    ASSERT_EQ(count, QEMU3DFX_WINE_MAJOR >= 2 ? 2 : 1, "SH4 + quartz + 0x12 + count 1");
+
+    count = 1; qemu3dfx_sysmem_count_quirk(0x13, &count);
+    ASSERT_EQ(count, 1, "other locations untouched");
+    count = 2; qemu3dfx_sysmem_count_quirk(0x12, &count);
+    ASSERT_EQ(count, 2, "count != 1 untouched");
+
+    reset(); mock_exe_path = "C:\\KONAMI\\SH4\\Silent Hill 4.exe";
+    count = 1; qemu3dfx_sysmem_count_quirk(0x12, &count);
+    ASSERT_EQ(count, 1, "needs quartz loaded");
+
+    reset(); mock_quartz_loaded = 1;
+    count = 1; qemu3dfx_sysmem_count_quirk(0x12, &count);
+    ASSERT_EQ(count, 1, "needs Silent Hill 4");
+}
+
 int main(void)
 {
-    /* hal_3dfx MUST be first — it has unclearable local statics. */
-    test_hal_3dfx_not_detected();
+    cfg_defaults = cfg;
 
-    test_detect_qemu_passthrough();
-    test_ensure_detected();
-    test_ensure_detected_not_present();
-    test_enum_hal_last();
-    test_surface_ddheap();
+    test_defaults();
+    test_hal_3dfx_exe_list();
+    test_registry_strings();
+    test_registry_app_overrides();
     test_passthru();
-    test_override_cooplevel_sentinel();
-    test_override_cooplevel_decrement_no_trigger();
-    test_override_cooplevel_reaches_zero();
-    test_override_cooplevel_with_trigger();
-    test_override_rendertarget_view_null();
-    test_override_rendertarget_view_null_resource();
-    test_override_rendertarget_view_sets_flag();
-    test_override_rendertarget_view_idempotent();
-    test_blit_fpslimit();
-    test_flip_fpslimit();
-    test_gamma_ramp_no_extension();
-    test_registry_key_strings();
-    test_wgl_extension_string();
+    test_override_cooplevel();
+    test_override_rendertarget_view();
+    test_fps_limits();
+    test_display_roi();
+    test_override_mode();
+    test_swap_interval();
+    test_scale_window();
+    test_latches();
+    test_is_qemu_bochs();
+    test_cursor_channel();
+    test_sysmem_quirk();
 
-    printf("test_hooks: %d passed, %d failed\n",
-           g_tests_passed, g_tests_failed);
-    return g_tests_failed > 0 ? 1 : 0;
+    printf("test_hooks (Wine %d.%d behaviour): %d passed, %d failed\n",
+           QEMU3DFX_WINE_MAJOR, QEMU3DFX_WINE_MINOR, g_passed, g_failed);
+    return g_failed ? 1 : 0;
 }

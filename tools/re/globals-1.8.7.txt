@@ -1,0 +1,14 @@
+# qemu-3dfx config globals in reference wined3d 1.8.7
+1005e04c cfg.UseLastContextTid
+1005e050 cfg.D3D1Hal3Dfx
+1005e054 cfg.D3D1EnumHalLast
+1005e058 cfg.unk_e058
+1005e05c cfg.BlitFpsLimit
+1005e060 cfg.FlipFpsLimit
+1005e064 cfg.ScaleWindow
+1005e068 cfg.DisplayROI
+1005e06c cfg.OverrideCoopFullscreen
+1005e070 cfg.OverrideModeWidth
+1005e074 cfg.SwapInterval
+1008f034 g.passthru
+1008f100 g.fps_next_tick

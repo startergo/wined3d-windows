@@ -14,6 +14,11 @@
 /* ── Pull in the unit under test ─────────────────────────────────── */
 #include "../qemu3dfx_ddraw_hooks.c"
 
+/* wined3d.dll exports used by the unit under test (Acquire/ReleaseDDThreadLock) */
+static int g_mutex_depth;
+void WINAPI wined3d_mutex_lock(void) { g_mutex_depth++; }
+void WINAPI wined3d_mutex_unlock(void) { g_mutex_depth--; }
+
 /* ── Minimal test framework ──────────────────────────────────────── */
 static int g_tests_passed = 0;
 static int g_tests_failed = 0;
@@ -137,46 +142,54 @@ static void test_vidmemlargestfree(void)
            "VidMemLargestFree: returns 0 for non-NULL heap");
 }
 
-/* DD-prefixed internal lock/unlock */
+/* ddrawwq.dll forwarders.  With no ddrawwq.dll (the mocks' LoadLibraryA
+ * returns NULL) they report E_NOTIMPL, and the DirectDraw thread lock falls
+ * back to the wined3d mutex.  Forwarding itself is checked against the
+ * reference DLL in tests/emu/test_ddraw.py. */
+#define E_NOTIMPL_HR ((HRESULT)0x80004001L)
+
 static void test_ddinternallock(void)
 {
-    ASSERT(DDInternalLock(NULL, NULL, NULL, 0) == 0,
-           "DDInternalLock: returns 0");
+    void *bits = (void *)0x1;
+    ASSERT(DDInternalLock(NULL, &bits) == E_NOTIMPL_HR,
+           "DDInternalLock: E_NOTIMPL without ddrawwq.dll");
 }
 
 static void test_ddinternalunlock(void)
 {
-    ASSERT(DDInternalUnlock(NULL, NULL, 0) == 0,
-           "DDInternalUnlock: returns 0");
+    ASSERT(DDInternalUnlock(NULL) == E_NOTIMPL_HR,
+           "DDInternalUnlock: E_NOTIMPL without ddrawwq.dll");
 }
 
-/* Standard ddraw.dll exports */
 static void test_acquire_ddthreadlock(void)
 {
+    int before = g_mutex_depth;
     AcquireDDThreadLock();
-    ASSERT(1, "AcquireDDThreadLock: does not crash");
+    ASSERT(g_mutex_depth == before + 1,
+           "AcquireDDThreadLock: takes the wined3d mutex without ddrawwq.dll");
 }
 
 static void test_release_ddthreadlock(void)
 {
+    int before = g_mutex_depth;
     ReleaseDDThreadLock();
-    ASSERT(1, "ReleaseDDThreadLock: does not crash");
+    ASSERT(g_mutex_depth == before - 1,
+           "ReleaseDDThreadLock: releases the wined3d mutex without ddrawwq.dll");
 }
 
 static void test_complete_create_sysmem_surface(void)
 {
-    ASSERT(CompleteCreateSysmemSurface(NULL) == 0,
-           "CompleteCreateSysmemSurface: returns 0");
+    ASSERT(CompleteCreateSysmemSurface(NULL) == E_NOTIMPL_HR,
+           "CompleteCreateSysmemSurface: E_NOTIMPL without ddrawwq.dll");
 }
 
 static void test_d3dparseunknowncommand(void)
 {
-    void *ret = NULL;
-    long hr = D3DParseUnknownCommand((void *)0x42, &ret);
-    ASSERT(hr == 0x8876086A,
-           "D3DParseUnknownCommand: returns D3DERR_COMMAND_UNPARSED");
-    ASSERT(ret == (void *)0x42,
-           "D3DParseUnknownCommand: sets ret to input cmd");
+    void *ret = (void *)0x99;
+    ASSERT(D3DParseUnknownCommand((void *)0x42, &ret) == E_NOTIMPL_HR,
+           "D3DParseUnknownCommand: E_NOTIMPL without ddrawwq.dll");
+    ASSERT(ret == (void *)0x99,
+           "D3DParseUnknownCommand: output untouched when not forwarded");
 }
 
 /* ── Main ────────────────────────────────────────────────────────── */

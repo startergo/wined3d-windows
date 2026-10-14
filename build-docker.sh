@@ -11,7 +11,7 @@ VERSIONS=(
     "3.0.5:3.0:tar.xz:0:legacy"
     "4.12.1:4.x:tar.xz:0:legacy"
     "5.0.5:5.0:tar.xz:0:legacy"
-    "6.0.4:6.0:tar.xz:1:legacy"
+    "6.0.4:6.0:tar.xz:0:legacy"
     "7.0.2:7.0:tar.xz:0:legacy"
     "8.0.2:8.0:tar.xz:0:modern"
 )

@@ -2,8 +2,37 @@
 """Patch PE DLLs for Win98 compatibility: set NO_SEH flag, strip COFF debug sections."""
 import struct, glob, os, sys
 
+# FILE_HEADER Characteristics flags
+RELOCS_STRIPPED = 0x0001  # must be CLEAR for relocatable DLLs
+
 # DllCharacteristics flags
 NO_SEH = 0x0400
+
+def fix_symbol_table(dll):
+    with open(dll, 'r+b') as f:
+        data = f.read()
+        pe_off = struct.unpack_from('<I', data, 0x3C)[0]
+        coff = pe_off + 4
+        nsec = struct.unpack_from('<H', data, coff + 2)[0]
+        opt_size = struct.unpack_from('<H', data, coff + 16)[0]
+        sym_ptr, sym_count = struct.unpack_from('<II', data, coff + 8)
+        if not sym_ptr or sym_ptr + sym_count * 18 + 4 <= len(data):
+            return                                   # absent or intact
+        sec_off = pe_off + 24 + opt_size
+        names = {b'/4': b'.eh_fram'}
+        renamed = []
+        for i in range(nsec):
+            s = sec_off + i * 40
+            raw = data[s:s + 8].split(b'\x00')[0]
+            if raw.startswith(b'/'):
+                new = names.get(raw, (b'.s' + raw[1:]).ljust(8, b'\x00')[:8])
+                f.seek(s); f.write(new.ljust(8, b'\x00'))
+                renamed.append(f'{raw.decode()}->{new.rstrip(bytes(1)).decode()}')
+        f.seek(coff + 8)
+        f.write(struct.pack('<II', 0, 0))
+        print(f'  Cleared dangling COFF symbol table ({sym_count} syms past EOF)'
+              f'{", renamed " + " ".join(renamed) if renamed else ""} ({os.path.basename(dll)})')
+
 
 outdir = sys.argv[1] if len(sys.argv) > 1 else '/output'
 for dll in glob.glob(os.path.join(outdir, '*.dll')):
@@ -14,6 +43,15 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
         opt = pe_off + 24
         opt_size = struct.unpack_from('<H', data, coff + 16)[0]
         nsec = struct.unpack_from('<H', data, coff + 2)[0]
+
+        # Clear RELOCS_STRIPPED so Win98 loader can relocate if ImageBase is taken
+        # (reference DLLs have 0x2306 not 0x2106 — bit 0x0001 must be clear)
+        file_chars = struct.unpack_from('<H', data, coff + 18)[0]
+        if file_chars & RELOCS_STRIPPED:
+            file_chars &= ~RELOCS_STRIPPED
+            f.seek(coff + 18)
+            f.write(struct.pack('<H', file_chars))
+            print(f'  Cleared RELOCS_STRIPPED: FileChars={hex(file_chars)} ({os.path.basename(dll)})')
 
         # Set NO_SEH flag in DllCharacteristics (match reference DLLs: 0x0540)
         dll_chars = struct.unpack_from('<H', data, opt + 70)[0]
@@ -99,3 +137,12 @@ for dll in glob.glob(os.path.join(outdir, '*.dll')):
             print(f'  Stripped {len(strip)} debug section(s) ({os.path.basename(dll)})')
         else:
             print(f'  No debug sections ({os.path.basename(dll)})')
+
+    # The COFF symbol table and its string table lived past the last section
+    # and were cut off by the truncate above (or by an earlier run): clear the
+    # header's PointerToSymbolTable/NumberOfSymbols, and give long section
+    # names ("/4" -> string-table offset, e.g. .eh_frame) a literal 8-byte
+    # name.  Otherwise the file is malformed and binutils rejects it
+    # ("file format not recognized").
+    fix_symbol_table(dll)
+

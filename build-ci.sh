@@ -217,7 +217,7 @@ download_wine() {
 
 # ── Generate .def from Wine .spec ─────────────────────────────────
 generate_def() {
-    local spec_file="$1" def_file="$2" dll_name="$3"
+    local spec_file="$1" def_file="$2" dll_name="$3" version="$4"
 
     echo "EXPORTS" > "$def_file"
 
@@ -240,12 +240,16 @@ generate_def() {
                    wined3d_passthru wined3d_override_cooplevel \
                    wined3d_override_rendertarget_view \
                    wined3d_blit_fpslimit wined3d_flip_fpslimit \
-                   wined3d_surface_ddheap \
-                   wined3d_streaming_buffer_map \
-                   wined3d_streaming_buffer_unmap \
-                   wined3d_streaming_buffer_upload; do
+                   wined3d_surface_ddheap; do
             grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
         done
+        # Wine 7.x: streaming buffers backported from 8.0 (8.0 exports them itself)
+        if [ "${version%%.*}" = "7" ]; then
+            for sym in wined3d_streaming_buffer_map wined3d_streaming_buffer_unmap \
+                       wined3d_streaming_buffer_upload; do
+                grep -q "^${sym}$" "$def_file" || echo "$sym" >> "$def_file"
+            done
+        fi
         for sym in malloc free realloc calloc strdup _strdup _expand _msize \
                    _msize_int strtoull strtoll \
                    crt_locks_init crt_sse2_is_safe crt_enable_sse2; do
@@ -416,7 +420,9 @@ setup_cflags() {
     find "$wine_src/dlls/wined3d" -name '*.c' -exec grep -l 'wined3d_private\.h' {} \; | \
         xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true
 
+    local qmaj="${version%%.*}" qrest="${version#*.}"
     CFLAGS_LIST=(
+        -DQEMU3DFX_WINE_MAJOR="$qmaj" -DQEMU3DFX_WINE_MINOR="${qrest%%.*}"
         -std=c99
         -O3
         -fomit-frame-pointer
@@ -776,7 +782,15 @@ build_version() {
     cp "$SCRIPT_DIR/docker/d3dkmt_stubs.c" "$wine_src/dlls/wined3d/d3dkmt_stubs.c" 2>/dev/null || true
     cp "$SCRIPT_DIR/qemu3dfx_hooks.c" "$wine_src/dlls/wined3d/qemu3dfx_hooks.c" 2>/dev/null || true
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_hooks.c" "$wine_src/dlls/ddraw/qemu3dfx_ddraw_hooks.c" 2>/dev/null || true
-    cp "$SCRIPT_DIR/qemu3dfx_ddraw_passthrough.c" "$wine_src/dlls/ddraw/qemu3dfx_ddraw_passthrough.c" 2>/dev/null || true
+    cp "$SCRIPT_DIR/qemu3dfx_ddthru.c" "$wine_src/dlls/ddraw/qemu3dfx_ddthru.c"
+    if [ "${version%%.*}" = "7" ]; then
+        # Wine 8.0 streaming buffers backported to 7.x (same as the Dockerfile)
+        cp "$SCRIPT_DIR/docker/qemu3dfx_streaming_buffer.c" "$wine_src/dlls/wined3d/qemu3dfx_streaming_buffer.c"
+        grep -q QEMU3DFX_WINED3D_STREAMING_BUFFER "$wine_src/include/wine/wined3d.h" ||
+            cat "$SCRIPT_DIR/docker/wined3d_streaming_buffer.h" >> "$wine_src/include/wine/wined3d.h"
+    fi
+    cp "$SCRIPT_DIR/docker/qemu3dfx.h" "$wine_src/dlls/wined3d/qemu3dfx.h"
+    cp "$SCRIPT_DIR/docker/qemu3dfx_ddraw.h" "$wine_src/dlls/ddraw/qemu3dfx_ddraw.h"
 
     # ── W→A display/version/monitor API patches (W versions not on Win98) ──
     # Apply to ALL wined3d .c files, not just directx.c
@@ -792,10 +806,11 @@ build_version() {
         sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/1/' "$wine_src/dlls/wined3d/cs.c"
     fi
 
+    # ── qemu-3dfx call sites (same patcher as the Docker build; fails on a moved anchor) ──
+    python3 "$SCRIPT_DIR/docker/qemu3dfx_callsites.py" "$wine_src/dlls" "$version"
+
     # ── Patch ddraw source for qemu-3dfx hooks ──
     if [ -f "$wine_src/dlls/ddraw/main.c" ]; then
-        sed -i 's/^BOOL WINAPI DllMain/extern void qemu3dfx_ddraw_passthrough_init(void);\n\nBOOL WINAPI DllMain/' "$wine_src/dlls/ddraw/main.c"
-        sed -i 's/DisableThreadLibraryCalls(inst);/DisableThreadLibraryCalls(inst);\n        qemu3dfx_ddraw_passthrough_init();/' "$wine_src/dlls/ddraw/main.c"
         # Copy Wine's exception.h and fix Prev→prev (MinGW-w64 uses Next, Wine uses Prev)
         if [ -f "$wine_src/include/wine/exception.h" ]; then
             cp "$wine_src/include/wine/exception.h" "$WINE9X/include/wine/exception.h"
@@ -805,23 +820,12 @@ build_version() {
         sed -i 's/return __wine_register_resources( instance );/return S_OK;/' "$wine_src/dlls/ddraw/main.c"
         sed -i 's/return __wine_unregister_resources( instance );/return S_OK;/' "$wine_src/dlls/ddraw/main.c"
     fi
-    if [ -f "$wine_src/dlls/ddraw/ddraw.c" ]; then
-        sed -i 's/#include "ddraw_private.h"/#include "ddraw_private.h"\nextern void qemu3dfx_ddraw_cooplevel(DWORD *);/' "$wine_src/dlls/ddraw/ddraw.c"
-        sed -i 's/DDRAW_dump_cooperativelevel(cooplevel);/DDRAW_dump_cooperativelevel(cooplevel);\n    qemu3dfx_ddraw_cooplevel(\&cooplevel);/' "$wine_src/dlls/ddraw/ddraw.c"
-    fi
-    if [ -f "$wine_src/dlls/ddraw/surface.c" ]; then
-        sed -i 's/#include "ddraw_private.h"/#include "ddraw_private.h"\nextern void qemu3dfx_ddraw_blit(void);\nextern void qemu3dfx_ddraw_flip(void);\nextern void qemu3dfx_ddraw_rtv(void *);/' "$wine_src/dlls/ddraw/surface.c"
-        sed -i 's/return wined3d_texture_blt(dst_surface/qemu3dfx_ddraw_blit();\n    return wined3d_texture_blt(dst_surface/' "$wine_src/dlls/ddraw/surface.c"
-        sed -i 's/return wined3d_device_context_blt(ddraw/qemu3dfx_ddraw_blit();\n    return wined3d_device_context_blt(ddraw/' "$wine_src/dlls/ddraw/surface.c"
-        sed -i 's/\(DDSCAPS2\? caps = {DDSCAPS_FLIP.*\)/\1\n    qemu3dfx_ddraw_flip();/' "$wine_src/dlls/ddraw/surface.c"
-        sed -i 's/\(tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);\)/\1\n    qemu3dfx_ddraw_rtv(tmp_rtv);/' "$wine_src/dlls/ddraw/surface.c"
-    fi
 
     # ── Generate .def files ──
     for dll_name in wined3d d3d9 d3d8 ddraw; do
         local spec="$wine_src/dlls/$dll_name/$dll_name.spec"
         if [ -f "$spec" ]; then
-            generate_def "$spec" "$build_dir/$dll_name.def" "$dll_name"
+            generate_def "$spec" "$build_dir/$dll_name.def" "$dll_name" "$version"
         fi
     done
 

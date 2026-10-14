@@ -3,11 +3,13 @@
  * by the reference qemu-3dfx DLLs.
  *
  * d3d9:  @ stub DebugSetLevel, PSGPError, PSGPSampleTexture
- * wined3d 7.0.2+: streaming_buffer_map/unmap/upload (backported by qemu-3dfx)
  * wined3d 8.0.2: vkd3d_* functions (Vulkan library, never called on Win98)
  *
  * These are no-op returns — matching the Wine @ stub behavior where
  * the function body would return 0/S_OK and do nothing.
+ *
+ * (wined3d_streaming_buffer_* used to be stubbed here for 7.0.2; they are
+ * now real — docker/qemu3dfx_streaming_buffer.c, a backport of Wine 8.0.)
  */
 
 #ifndef _WIN32
@@ -21,25 +23,6 @@
 void WINAPI DebugSetLevel(DWORD level) {}
 void WINAPI PSGPError(DWORD code) {}
 DWORD WINAPI PSGPSampleTexture(void *a, void *b, void *c, void *d) { return 0; }
-
-/* --- wined3d streaming_buffer stubs (backported by qemu-3dfx for 7.0.2+) --- */
-
-HRESULT CDECL wined3d_streaming_buffer_map(void *device, void *buffer,
-    unsigned int size, unsigned int stride, unsigned int *ret_pos, void **dst_data)
-{
-    if (ret_pos) *ret_pos = 0;
-    if (dst_data) *dst_data = NULL;
-    return 0x80004005; /* E_FAIL */
-}
-
-void CDECL wined3d_streaming_buffer_unmap(void *buffer) {}
-
-HRESULT CDECL wined3d_streaming_buffer_upload(void *device, void *buffer,
-    const void *data, unsigned int size, unsigned int stride, unsigned int *ret_pos)
-{
-    if (ret_pos) *ret_pos = 0;
-    return 0x80004005; /* E_FAIL */
-}
 
 /* --- vkd3d stubs (Vulkan library, never called on Win98) --- */
 
