@@ -302,7 +302,8 @@ setup_cflags() {
     echo '#define __WINE_MALLOC' >> /tmp/wine_alloc_size.h
 
     # Remove wine9x's outdated headers — Wine's own are newer
-    for h in wined3d.h wgl_driver.h wgl.h; do
+    # rbtree.h: its API changed in Wine 2.0; wine9x's 1.7 copy crashed every wined3d device creation
+    for h in wined3d.h wgl_driver.h wgl.h rbtree.h; do
         if [ -f "$WINE9X/include/wine/$h" ]; then
             mv "$WINE9X/include/wine/$h" "$WINE9X/include/wine/$h.wine9x"
         fi

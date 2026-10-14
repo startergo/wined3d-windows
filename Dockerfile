@@ -162,6 +162,8 @@ RUN set -ex && \
       target=/build/include/wine/$(basename "$f"); \
       [ ! -f "$target" ] && cp "$f" "$target"; \
     done && \
+    true "rbtree.h: always Wine's own - its API changed in 2.0 (wine_rb_init(tree, compare)); wine9x's 1.7 header made every wined3d device creation call the compare function as a function table and crash" && \
+    cp /tmp/wine-${WINE_VERSION}/include/wine/rbtree.h /build/include/wine/rbtree.h && \
     mkdir -p /build/include/ddk && \
     cp /tmp/wine-${WINE_VERSION}/include/ddk/*.h /build/include/ddk/ 2>/dev/null || true && \
     ls /build/include/ddk/d3dkmthk.h 2>/dev/null && cp /build/include/ddk/d3dkmthk.h /docker/ddk/d3dkmthk.h || echo "NOTE: using docker/ddk/d3dkmthk.h" && \
