@@ -313,9 +313,9 @@ RUN set -ex && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
     echo "wined3d_OBJS += /build/nocrt_entry.o" >> Makefile && \
     echo "wined3d_OBJS += /build/mingw_matherr_stubs.o" >> Makefile && \
-    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddthru.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
-    echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
-    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o /build/heap_compat.o /build/nocrt_entry.o" >> Makefile && \
+    echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddthru.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/mingw_matherr_stubs.o /build/nocrt_entry.o" >> Makefile && \
+    echo "d3d8_OBJS += /build/kernel32_compat.o /build/copysign.o /build/mingw_matherr_stubs.o /build/nocrt_entry.o" >> Makefile && \
+    echo "d3d9_OBJS += /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o /build/mingw_matherr_stubs.o /build/nocrt_entry.o" >> Makefile && \
     \
     echo "=== Add qemu-3dfx exports to wined3d.def ===" && \
     echo "  wined3d_hal_3dfx" >> wined3d/wined3d.def && \
@@ -334,7 +334,6 @@ RUN set -ex && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/libwine_stubs.o /docker/libwine_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/wine_spec_stubs.o /docker/wine_spec_stubs.c && \
-    i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/heap_compat.o /docker/heap_compat.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/nocrt_entry.o /docker/nocrt_entry.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/mingw_matherr_stubs.o /docker/mingw_matherr_stubs.c && \
     \
@@ -380,10 +379,10 @@ RUN set -ex && \
       true "=== Wine 7.x: compile the streaming buffer backport (must succeed) ===" && \
       make wined3d/qemu3dfx_streaming_buffer.c.o; \
     fi && \
-    true "=== Link ddraw/d3d8/d3d9 with nocrt, wined3d with nocrt+msvcrt ===" && \
-    sed -i '/ddraw_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -ladvapi32 $(DLLFLAGS_NOCRT)/' Makefile && \
-    sed -i '/d3d8_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 $(DLLFLAGS_NOCRT)/' Makefile && \
-    sed -i '/d3d9_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 $(DLLFLAGS_NOCRT)/' Makefile && \
+    true "=== Link all four DLLs against Win98's msvcrt (like the reference) ===" && \
+    sed -i '/ddraw_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -ladvapi32 $(DLLFLAGS_NOCRT) -lmsvcrt -lmingwex/' Makefile && \
+    sed -i '/d3d8_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 $(DLLFLAGS_NOCRT) -lmsvcrt -lmingwex/' Makefile && \
+    sed -i '/d3d9_OBJS.*DX_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 $(DLLFLAGS_NOCRT) -lmsvcrt -lmingwex/' Makefile && \
     sed -i '/wined3d_OBJS.*WINED3D_LIBS/s/$(DLLFLAGS)/-lkernel32 -luser32 -lgdi32 -ladvapi32 -lopengl32 $(DLLFLAGS_NOCRT) -lmsvcrt -lmingwex/' Makefile && \
     true "=== Build all DLLs ===" && \
     make wined3d.dll winedd.dll wined8.dll wined9.dll && \

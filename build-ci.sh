@@ -622,9 +622,8 @@ compile_compat() {
     echo "  CC wine_spec_stubs.c"
     $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_wine_spec_stubs.o" "$SCRIPT_DIR/docker/wine_spec_stubs.c" 2>/dev/null || true
 
-    # Compile heap_compat: CRT functions via kernel32 HeapAlloc/HeapFree (no msvcrt)
-    echo "  CC heap_compat.c"
-    $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_heap_compat.o" "$SCRIPT_DIR/docker/heap_compat.c" 2>/dev/null || true
+    # (heap_compat.c is no longer used: all four DLLs link Win98's msvcrt, like
+    # the reference; it used to be compiled into every object dir, wined3d's too)
 
     # Compile mingw_matherr_stubs: no-op stubs for MinGW internal math symbols
     echo "  CC mingw_matherr_stubs.c"
@@ -661,9 +660,9 @@ link_d3d() {
     local pt_build="$WINE9X/pthread9x/build"
     local wined3d_dir="$5"
 
-    local extra_libs="-lkernel32 -lgcc"
+    local extra_libs="-lkernel32 -lmsvcrt -lmingwex -lgcc"
     if [ "$dll_name" = "d3d9" ]; then
-        extra_libs="-lkernel32 -luser32 -lgcc"
+        extra_libs="-lkernel32 -luser32 -lmsvcrt -lmingwex -lgcc"
     fi
 
     echo "  LD $dll_name.dll"
@@ -674,7 +673,7 @@ link_d3d() {
         "$pt_build/memory.o" \
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
-        "$obj_dir/_heap_compat.o" \
+        "$obj_dir/_mingw_matherr_stubs.o" \
         "$obj_dir/_nocrt_entry.o" \
         -L"$wined3d_dir" -lwined3d -lgdi32 \
         $extra_libs \
@@ -700,10 +699,10 @@ link_ddraw() {
         "$pt_build/memory.o" \
         "$pt_build/lockex.o" \
         "$pt_build/tryentercriticalsection.o" \
-        "$obj_dir/_heap_compat.o" \
+        "$obj_dir/_mingw_matherr_stubs.o" \
         "$obj_dir/_nocrt_entry.o" \
         -L"$wined3d_dir" -lwined3d -lgdi32 \
-        -lkernel32 -luser32 -ladvapi32 -lgcc \
+        -lkernel32 -luser32 -ladvapi32 -lmsvcrt -lmingwex -lgcc \
         -Wl,--allow-multiple-definition \
         -Wl,--file-alignment,0x1000 \
         -Wl,--out-implib,"$(dirname "$output")/lib$(basename "${output%.dll}").a" \
