@@ -20,18 +20,56 @@ void __mingw_raise_matherr(int type, const char *name,
     (void)type; (void)name; (void)arg1; (void)arg2; (void)retval;
 }
 
-/* _vsnprintf / _vscprintf — stubs that return a safe default.
- * The real implementations come from either heap_compat.c or msvcrt.dll at runtime. */
-int _vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
+/* _vsnprintf / _vscprintf / __ms_vsnprintf — the real thing.
+ *
+ * These used to be stubs returning 0 without writing anything. wined3d
+ * builds its GLSL shader source and uniform names with vsnprintf, so every
+ * shader came out empty or garbled and 3D rendered black (the reference
+ * imports msvcrt's _vsnprintf). Resolve msvcrt's _vsnprintf at runtime -
+ * keeps the -nostdlib link free of the libmingwex/msvcrt cycle this file
+ * exists to break, and works in DLLs that do not link msvcrt at all. */
+#include <windows.h>
+
+typedef int (__cdecl *vsnprintf_fn)(char *, unsigned int, const char *, va_list);
+
+static vsnprintf_fn msvcrt_vsnprintf(void)
 {
-    (void)buf; (void)size; (void)fmt; (void)ap;
-    return 0;
+    static vsnprintf_fn fn;
+    if (!fn)
+        fn = (vsnprintf_fn)GetProcAddress(LoadLibraryA("msvcrt.dll"), "_vsnprintf");
+    return fn;
 }
 
+int _vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
+{
+    vsnprintf_fn fn = msvcrt_vsnprintf();
+    if (!fn)
+    {
+        if (size) buf[0] = 0;
+        return -1;
+    }
+    return fn(buf, size, fmt, ap);
+}
+
+/* Length of the formatted text (msvcrt 6 on Win98 has no _vscprintf). */
 int _vscprintf(const char *fmt, va_list ap)
 {
-    (void)fmt; (void)ap;
-    return 0;
+    unsigned int size = 512;
+    for (;;)
+    {
+        char *buf = HeapAlloc(GetProcessHeap(), 0, size);
+        int n;
+        va_list copy;
+
+        if (!buf) return -1;
+        va_copy(copy, ap);
+        n = _vsnprintf(buf, size, fmt, copy);
+        va_end(copy);
+        HeapFree(GetProcessHeap(), 0, buf);
+        if (n >= 0 && (unsigned int)n < size) return n;
+        if (size >= 64 * 1024 * 1024) return -1;
+        size *= 2;
+    }
 }
 
 /* __logl_internal — called by MinGW's log() wrapper in libmsvcrt.a.
@@ -42,9 +80,8 @@ double __logl_internal(double x)
     return x;
 }
 
-/* __ms_vsnprintf — alias used by MinGW's vsnprintf wrapper in libmsvcrt.a */
+/* __ms_vsnprintf — what MinGW's vsnprintf wrapper in libmsvcrt.a calls */
 int __ms_vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
 {
-    (void)buf; (void)size; (void)fmt; (void)ap;
-    return 0;
+    return _vsnprintf(buf, size, fmt, ap);
 }
