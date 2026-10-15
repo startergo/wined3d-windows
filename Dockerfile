@@ -216,7 +216,7 @@ RUN set -ex && \
     \
     true "=== Win9x: AllocateLocallyUniqueId fallback ===" && \
     if [ -f /build/wined3d/directx.c ]; then \
-        perl -pi -0777 -e 's/(if \(!AllocateLocallyUniqueId\(&adapter->luid\)\)\s*\{\s*)(ERR|WARN)\("[^"]*"[^;]*;\s*return FALSE;/${1}FILETIME _ftm_luid;\n        WARN("LUID alloc failed, using time fallback.\\n");\n        GetSystemTimeAsFileTime(\&_ftm_luid);\n        adapter->luid.HighPart = _ftm_luid.dwLowDateTime;\n        adapter->luid.LowPart = _ftm_luid.dwHighDateTime;/s' /build/wined3d/directx.c; \
+        perl -pi -0777 -e 's/(if \(!AllocateLocallyUniqueId\(&adapter->luid\)\)\s*\{\s*)(ERR|WARN)\("[^"]*"[^;]*;\s*(?:wined3d_output_cleanup\(&adapter->output\);\s*)?return FALSE;/${1}FILETIME _ftm_luid;\n        WARN("LUID alloc failed, using time fallback.\\n");\n        GetSystemTimeAsFileTime(\&_ftm_luid);\n        adapter->luid.HighPart = _ftm_luid.dwLowDateTime;\n        adapter->luid.LowPart = _ftm_luid.dwHighDateTime;/s' /build/wined3d/directx.c; \
         echo "  Patched AllocateLocallyUniqueId fallback"; \
     fi && \
     \

@@ -75,8 +75,25 @@ static BOOL qemu3dfx_enum_emulation_devices(LPD3DENUMDEVICESCALLBACK callback, v
 }
 '''
 
+ZBUFFER_DEPTHS = (
+    '/* qemu-3dfx: DDCAPS.dwZBufferBitDepths from the HAL device\'s Z formats\n'
+    ' * (ref 6.0.4 0x10001404; stock Wine leaves it 0, old games read it). */\n'
+    'static HRESULT CALLBACK qemu3dfx_zbuffer_depths(DDPIXELFORMAT *format, void *ctx)\n'
+    '{\n'
+    '    DDCAPS *caps = ctx;\n'
+    '\n'
+    '    switch (((const DWORD *)format)[3])   /* dwZBufferBitDepth */\n'
+    '    {\n'
+    '        case 8:  caps->dwZBufferBitDepths |= DDBD_8; break;\n'
+    '        case 16: caps->dwZBufferBitDepths |= DDBD_16; break;\n'
+    '        case 24: caps->dwZBufferBitDepths |= DDBD_24; break;\n'
+    '        case 32: caps->dwZBufferBitDepths |= DDBD_32; break;\n'
+    '    }\n'
+    '    return D3DENUMRET_OK;\n'
+    '}\n')
+
 PRELUDE = {
-    'ddraw.c': ENUM_EMULATION,
+    'ddraw.c': ENUM_EMULATION + ZBUFFER_DEPTHS,
     'texture.c': ON_SWAPCHAIN,
     'context_gl.c': ON_SWAPCHAIN +
         '\n'
@@ -834,6 +851,17 @@ EDITS += [
      'NULL, NULL, (HINSTANCE)&__ImageBase, NULL)', ALL),
     ('ddraw/ddraw.c', r'static HRESULT ddraw_set_cooperative_level\(', r'NULL, NULL, NULL, NULL\)', 'replace',
      'NULL, NULL, (HINSTANCE)&__ImageBase, NULL)', ALL),
+]
+
+
+# ---- DDCAPS.dwZBufferBitDepths (ddraw, all versions) ------------------------
+# Reference (all versions; 6.0.4 at 0x1000361c): ddraw7_GetCaps enumerates
+# the HAL device's Z formats and ORs DDBD_* bits into dwZBufferBitDepths
+# (0x600 / 0x700); stock Wine leaves it 0. Found by the capsdump comparison.
+EDITS += [
+    ('ddraw/ddraw.c', r'static HRESULT WINAPI ddraw7_GetCaps\(', r'if\s*\(DriverCaps\)', 'before',
+     'IDirect3D7_EnumZBufferFormats(&ddraw->IDirect3D7_iface, &IID_IDirect3DHALDevice,\n'
+     '        qemu3dfx_zbuffer_depths, &caps);', ALL),
 ]
 
 
