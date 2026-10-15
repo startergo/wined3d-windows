@@ -861,7 +861,10 @@ EDITS += [
 EDITS += [
     ('ddraw/ddraw.c', r'static HRESULT WINAPI ddraw7_GetCaps\(', r'if\s*\(DriverCaps\)', 'before',
      'IDirect3D7_EnumZBufferFormats(&ddraw->IDirect3D7_iface, &IID_IDirect3DHALDevice,\n'
-     '        qemu3dfx_zbuffer_depths, &caps);', ALL),
+     '        qemu3dfx_zbuffer_depths, &caps);', {3, 4, 5, 6, 7, 8}),
+    # 1.8-2.0: the reference stores a constant instead (ref 1.8.7 0x100034f9).
+    ('ddraw/ddraw.c', r'static HRESULT WINAPI ddraw7_GetCaps\(', r'if\s*\(DriverCaps\)', 'before',
+     'caps.dwZBufferBitDepths = DDBD_16 | DDBD_24;', {1, 2}),
 ]
 
 
