@@ -812,7 +812,8 @@ build_version() {
 
     # ── RtlIsCriticalSectionLockedByThread redirect (3.0.5+) ──
     if [ -f "$wine_src/dlls/wined3d/cs.c" ]; then
-        sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/1/' "$wine_src/dlls/wined3d/cs.c"
+        # 0, as in the Docker build and the reference: no command-stream thread
+        sed -i 's/!RtlIsCriticalSectionLockedByThread(NtCurrentTeb()->Peb->LoaderLock)/0/' "$wine_src/dlls/wined3d/cs.c"
     fi
 
     # ── Version resources matching the reference DLLs ──

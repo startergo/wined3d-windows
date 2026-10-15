@@ -84,11 +84,9 @@ BOOL __stdcall GlobalMemoryStatusEx(MEMORYSTATUSEX *lpBuffer)
     return 0;
 }
 
-/* --- FreeLibraryAndExitThread (Win2k+, not on Win98) --- */
-void __stdcall FreeLibraryAndExitThread(void *hModule, unsigned long dwExitCode)
-{
-    for (;;);
-}
+/* FreeLibraryAndExitThread: Win98's KERNEL32 exports it (Win95+). A former
+ * "for (;;);" stand-in here made every exiting wined3d command-stream thread
+ * spin at full speed forever. */
 
 /* --- SetThreadDescription (Win10+, not on Win98) --- */
 void __stdcall SetThreadDescription(void *hThread, const WCHAR *lpThreadDescription)
@@ -114,10 +112,6 @@ __asm__("\n"
     ".align 4\n"
     "__imp__GlobalMemoryStatusEx@4:\n"
     "    .long _GlobalMemoryStatusEx@4\n"
-    ".globl __imp__FreeLibraryAndExitThread@8\n"
-    ".align 4\n"
-    "__imp__FreeLibraryAndExitThread@8:\n"
-    "    .long _FreeLibraryAndExitThread@8\n"
     ".globl __imp__SetThreadDescription@8\n"
     ".align 4\n"
     "__imp__SetThreadDescription@8:\n"
