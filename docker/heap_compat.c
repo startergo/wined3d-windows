@@ -157,101 +157,50 @@ int __cdecl isspace(int c) { return c == ' ' || (c >= 9 && c <= 13); }
 int __cdecl isupper(int c) { return c >= 'A' && c <= 'Z'; }
 
 /* Minimal sprintf — handles %s, %d, %x, %c, %% */
-static int _itoa(int val, char *buf, int base)
+/* printf family: msvcrt's real _vsnprintf, resolved at runtime.
+ * This used to be a hand-written formatter knowing only %s %d %u %x %c %p
+ * (no flags, widths, precision or length modifiers; unknown specifiers
+ * consumed no argument and shifted the rest) - why the debug log printed
+ * "%#x" literally. These DLLs do not link msvcrt, but Win98 always has it. */
+#include <stdarg.h>
+void *__stdcall LoadLibraryA(const char *name);
+void *__stdcall GetProcAddress(void *module, const char *name);
+
+typedef int (__cdecl *vsnprintf_fn)(char *, unsigned int, const char *, va_list);
+
+static vsnprintf_fn crt_vsnprintf(void)
 {
-    char tmp[12];
-    int neg = 0, i = 0;
-    unsigned int uval;
-    if (base == 10 && val < 0) { neg = 1; uval = (unsigned int)(-val); }
-    else uval = (unsigned int)val;
-    if (uval == 0) tmp[i++] = '0';
-    else while (uval) { tmp[i++] = "0123456789abcdef"[uval % base]; uval /= base; }
-    int len = 0;
-    if (neg) buf[len++] = '-';
-    while (i--) buf[len++] = tmp[i];
-    return len;
+    static vsnprintf_fn fn;
+    if (!fn)
+        fn = (vsnprintf_fn)GetProcAddress(LoadLibraryA("msvcrt.dll"), "_vsnprintf");
+    return fn;
+}
+
+int __cdecl _vsnprintf(char *buf, unsigned int count, const char *fmt, va_list ap)
+{
+    vsnprintf_fn fn = crt_vsnprintf();
+    if (!fn)
+    {
+        if (count) buf[0] = 0;
+        return -1;
+    }
+    return fn(buf, count, fmt, ap);
+}
+
+int __cdecl vsnprintf(char *buf, unsigned int count, const char *fmt, va_list ap)
+{
+    return _vsnprintf(buf, count, fmt, ap);
 }
 
 int __cdecl sprintf(char *buf, const char *fmt, ...)
 {
-    int *ap = (int *)(&fmt + 1);
-    int out = 0;
-    while (*fmt) {
-        if (*fmt != '%') { buf[out++] = *fmt++; continue; }
-        fmt++;
-        if (*fmt == 's') {
-            const char *s = (const char *)*ap++;
-            if (!s) s = "(null)";
-            while (*s) buf[out++] = *s++;
-        } else if (*fmt == 'd') {
-            out += _itoa(*ap++, buf + out, 10);
-        } else if (*fmt == 'x' || *fmt == 'X') {
-            out += _itoa(*ap++, buf + out, 16);
-        } else if (*fmt == 'c') {
-            buf[out++] = (char)*ap++;
-        } else if (*fmt == '%') {
-            buf[out++] = '%';
-        } else {
-            buf[out++] = '%'; buf[out++] = *fmt;
-        }
-        fmt++;
-    }
-    buf[out] = 0;
-    return out;
-}
+    va_list ap;
+    int n;
 
-/* Minimal _vsnprintf — handles %s, %d, %u, %x, %X, %c, %p, %% */
-static int _utoa_buf(unsigned int val, char *buf, int base)
-{
-    char tmp[12];
-    int i = 0, len = 0;
-    if (val == 0) tmp[i++] = '0';
-    else while (val) { tmp[i++] = "0123456789abcdef"[val % base]; val /= base; }
-    while (i--) buf[len++] = tmp[i];
-    return len;
-}
-
-int __cdecl _vsnprintf(char *buf, unsigned int count, const char *fmt, void *ap)
-{
-    int *ap_ptr = (int *)ap;
-    int out = 0;
-    int space = (count > 0) ? (int)count - 1 : 0;
-    while (*fmt && out < space) {
-        if (*fmt != '%') { buf[out++] = *fmt++; continue; }
-        fmt++;
-        if (*fmt == 's') {
-            const char *s = (const char *)*ap_ptr++;
-            if (!s) s = "(null)";
-            while (*s && out < space) buf[out++] = *s++;
-        } else if (*fmt == 'd') {
-            char tmp[16];
-            int len = _itoa(*ap_ptr++, tmp, 10);
-            int i; for (i = 0; i < len && out < space; i++) buf[out++] = tmp[i];
-        } else if (*fmt == 'u') {
-            char tmp[16];
-            int len = _utoa_buf((unsigned int)*ap_ptr++, tmp, 10);
-            int i; for (i = 0; i < len && out < space; i++) buf[out++] = tmp[i];
-        } else if (*fmt == 'x' || *fmt == 'X') {
-            char tmp[16];
-            int len = _itoa(*ap_ptr++, tmp, 16);
-            int i; for (i = 0; i < len && out < space; i++) buf[out++] = tmp[i];
-        } else if (*fmt == 'c') {
-            buf[out++] = (char)*ap_ptr++;
-        } else if (*fmt == 'p') {
-            if (out < space) buf[out++] = '0';
-            if (out < space) buf[out++] = 'x';
-            { char tmp[16]; int len = _utoa_buf((unsigned int)*ap_ptr++, tmp, 16);
-              int i; for (i = 0; i < len && out < space; i++) buf[out++] = tmp[i]; }
-        } else if (*fmt == '%') {
-            buf[out++] = '%';
-        } else {
-            if (out < space) buf[out++] = '%';
-            if (out < space) buf[out++] = *fmt;
-        }
-        fmt++;
-    }
-    if (count > 0) buf[out < (int)count ? out : (int)count - 1] = 0;
-    return out;
+    va_start(ap, fmt);
+    n = _vsnprintf(buf, 0x7fffffff, fmt, ap);
+    va_end(ap);
+    return n;
 }
 
 /* Stub I/O — Wine ddraw debug output, not needed at runtime */
@@ -264,7 +213,6 @@ char *__cdecl getenv(const char *name) { return 0; }
    Without msvcrt, the MinGW name-mangling that maps strdup→_strdup is absent. */
 char *__cdecl strdup(const char *s) { return _strdup(s); }
 int __cdecl write(int fd, const void *buf, unsigned int count) { return _write(fd, buf, count); }
-int __cdecl vsnprintf(char *buf, unsigned int count, const char *fmt, void *ap) { return _vsnprintf(buf, count, fmt, ap); }
 
 /* Math — sqrtf without libm/msvcrt */
 float __cdecl sqrtf(float x) { __asm__("fsqrt" : "+t"(x)); return x; }
