@@ -865,6 +865,18 @@ EDITS += [
 ]
 
 
+# ---- Wine 1.9 bug: p_wglGetPixelFormat never loaded (USE_WIN32_OPENGL) ------
+# 1.9.x's USE_WIN32_OPENGL loader fills the GL core table and p_wglSwapBuffers
+# only, but context_enter() calls gl_ops.wgl.p_wglGetPixelFormat: an
+# uninitialised slot (0x17 in the VM) - every swapchain context creation
+# crashed. 1.8 and 2.0+ load it next to wglSwapBuffers; do the same.
+EDITS += [
+    ('directx.c', r'static BOOL wined3d_adapter_init\(',
+     r'gl_info->gl_ops\.wgl\.p_wglSwapBuffers = \(void \*\)GetProcAddress\(mod_gl, "wglSwapBuffers"\);', 'after',
+     'gl_info->gl_ops.wgl.p_wglGetPixelFormat = (void *)GetProcAddress(mod_gl, "wglGetPixelFormat");', {'1.9'}),
+]
+
+
 def function_span(src, func_re):
     """(start, end) of the body of the first function whose definition
     matches func_re (start at its opening brace, end after its closing one)."""
