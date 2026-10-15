@@ -37,3 +37,6 @@ HRESULT WINAPI DirectDrawEnumerateExA(LPDDENUMCALLBACKEXA callback, void *contex
 HRESULT WINAPI GetSurfaceFromDC(HDC dc, IDirectDrawSurface4 **surface, HDC *device_dc) __attribute__((noinline));
 
 #endif /* QEMU3DFX_DDRAW_H */
+
+/* this DLL's instance (hidden windows need it on Win9x) */
+extern IMAGE_DOS_HEADER __ImageBase;

@@ -821,6 +821,22 @@ EDITS += [
 ]
 
 
+# ---- the DLL instance for ddraw's hidden windows (all versions) -------------
+# Like wined3d's (latch0): ddraw's "Hidden D3D Window" and its device window
+# use the class DllMain registers with ddraw's instance; on Win9x a
+# non-global class is only found with that instance, and the reference
+# passes it (ref 6.0.4 0x100054df/0x100057d6, from DllMain's instance).
+# With NULL, CreateWindowExA failed on Win98 and every swapchain with it
+# ("Failed to create window" / "Failed to create swapchain"): frames were
+# rendered but never presented.
+EDITS += [
+    ('ddraw/ddraw.c', r'static HRESULT ddraw_attach_d3d_device\(', r'NULL, NULL, NULL, NULL\)', 'replace',
+     'NULL, NULL, (HINSTANCE)&__ImageBase, NULL)', ALL),
+    ('ddraw/ddraw.c', r'static HRESULT ddraw_set_cooperative_level\(', r'NULL, NULL, NULL, NULL\)', 'replace',
+     'NULL, NULL, (HINSTANCE)&__ImageBase, NULL)', ALL),
+]
+
+
 def function_span(src, func_re):
     """(start, end) of the body of the first function whose definition
     matches func_re (start at its opening brace, end after its closing one)."""
@@ -856,10 +872,12 @@ def main():
         todo = [e for e in todo if '/' in e[0]]
         print('qemu3dfx call sites: wined3d edits skipped (QEMU3DFX_SKIP_WINED3D)')
     elif os.environ.get('QEMU3DFX_ONLY'):
-        i, j = (int(x) for x in os.environ['QEMU3DFX_ONLY'].split(':'))
-        keep = wd[i:j]
+        keep = []
+        for part in os.environ['QEMU3DFX_ONLY'].split(','):
+            i, j = (int(x) for x in part.split(':'))
+            keep += wd[i:j]
         todo = [e for e in todo if '/' in e[0] or e in keep]
-        print('qemu3dfx call sites: wined3d edits %d..%d of %d only' % (i, j, len(wd)))
+        print('qemu3dfx call sites: wined3d edits %s of %d only' % (os.environ['QEMU3DFX_ONLY'], len(wd)))
     if not any('/' not in e[0] for e in todo):
         print('qemu3dfx call sites: wined3d sites not mapped for Wine %s yet (module functions stay unused)' % version)
     if not todo:

@@ -164,6 +164,13 @@ RUN set -ex && \
     done && \
     true "rbtree.h: always Wine's own - its API changed in 2.0 (wine_rb_init(tree, compare)); wine9x's 1.7 header made every wined3d device creation call the compare function as a function table and crash" && \
     cp /tmp/wine-${WINE_VERSION}/include/wine/rbtree.h /build/include/wine/rbtree.h && \
+    true "wgl.h, wgl_driver.h, list.h: Wine's own too, as build-ci.sh does - wine9x's 1.7 GL headers (constants, opengl_funcs table) are far behind" && \
+    for h in wgl.h wgl_driver.h list.h; do \
+      [ -f /tmp/wine-${WINE_VERSION}/include/wine/$h ] && cp /tmp/wine-${WINE_VERSION}/include/wine/$h /build/include/wine/$h; \
+    done && \
+    if grep -q HPBUFFERARB /build/include/wine/wgl.h; then \
+      echo '/* superseded: this Wine version'"'"'s wgl.h carries the WGL extension definitions */' > /build/include/wine/wglext.h; \
+    fi && \
     mkdir -p /build/include/ddk && \
     cp /tmp/wine-${WINE_VERSION}/include/ddk/*.h /build/include/ddk/ 2>/dev/null || true && \
     ls /build/include/ddk/d3dkmthk.h 2>/dev/null && cp /build/include/ddk/d3dkmthk.h /docker/ddk/d3dkmthk.h || echo "NOTE: using docker/ddk/d3dkmthk.h" && \
