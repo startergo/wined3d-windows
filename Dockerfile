@@ -168,6 +168,10 @@ RUN set -ex && \
     for h in wgl.h wgl_driver.h list.h; do \
       [ -f /tmp/wine-${WINE_VERSION}/include/wine/$h ] && cp /tmp/wine-${WINE_VERSION}/include/wine/$h /build/include/wine/$h; \
     done && \
+    true "Wine >= 9: wined3d includes the bundled vkd3d-shader headers (types only; docker/vkd3d_stubs.c stands in for the library)" && \
+    if [ "$WINE_MAJ" -ge 9 ] && [ -f /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_shader.h ]; then \
+      cp /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_shader.h /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_types.h /build/include/; \
+    fi && \
     if grep -q HPBUFFERARB /build/include/wine/wgl.h; then \
       echo '/* superseded: this Wine version'"'"'s wgl.h carries the WGL extension definitions */' > /build/include/wine/wglext.h; \
     fi && \
@@ -181,6 +185,12 @@ RUN set -ex && \
     cp /tmp/wine-${WINE_VERSION}/include/ddraw.h /build/include/ 2>/dev/null || true && \
     rm -f /build/include/ddraw.h && \
     true "=== ddraw.h comes from mingw/ (uses DECL_WINELIB_TYPE_AW from windef.h) ===" && \
+    true "Wine >= 9 writes DirectDraw/D3D union members without names (it dropped NONAMELESSUNION); wine9x's mingw headers hard-code u1..u5/s - make those unions anonymous" && \
+    if [ "$WINE_MAJ" -ge 9 ]; then \
+      for h in ddraw.h d3dtypes.h d3d8types.h; do \
+        sed -i -E 's/\} u([0-9]*);/} DUMMYUNIONNAME\1;/; s/\} s([0-9]*);/} DUMMYSTRUCTNAME\1;/' /build/mingw/$h; \
+      done; \
+    fi && \
     cp /tmp/wine-${WINE_VERSION}/include/d3d8.h /build/include/ 2>/dev/null || true && \
     cp /tmp/wine-${WINE_VERSION}/include/d3d9.h /build/include/ 2>/dev/null || true && \
     \
@@ -224,6 +234,11 @@ RUN set -ex && \
     for f in /build/wined3d/wined3d_private.h; do \
         [ -f "$f" ] && sed -i 's/->Spare\[0\] *=.*;/;/' "$f"; \
     done && \
+    true "=== Wine >= 9: wined3d_pause yields with NtDelayExecution (timeout 0); Win98 ntdll lacks it - Sleep(0) is the same yield ===" && \
+    if [ "$WINE_MAJ" -ge 9 ]; then \
+      sed -i 's/NtDelayExecution(FALSE, &timeout);/{ (void)timeout; Sleep(0); }/' /build/wined3d/wined3d_private.h; \
+      grep -q 'NtDelayExecution' /build/wined3d/wined3d_private.h && { echo "NtDelayExecution substitution failed"; exit 1; } || true; \
+    fi && \
     true "=== Remove vkd3d (Wine 8.0+ Vulkan D3D, not needed for Win98) ===" && \
     sed -i '/#include <vkd3d.h>/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
     sed -i '/WINE_DECLARE_DEBUG_CHANNEL(vkd3d)/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
@@ -281,6 +296,8 @@ RUN set -ex && \
     grep -E '^@ (stdcall|cdecl)' /tmp/wine-${WINE_VERSION}/dlls/wined3d/wined3d.spec 2>/dev/null | \
         sed -E 's/^@ (stdcall|cdecl)( -private)? ([a-zA-Z0-9_]+).*/  \3/' | \
         grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore' >> /build/wined3d/wined3d.def && \
+    true "Wine >= 9: drop wined3d's vkd3d re-exports (for D3D10-12 DLLs, which Win98 lacks; only the shader functions are stubbed, for wined3d's own use)" && \
+    if [ "$WINE_MAJ" -ge 9 ]; then sed -i '/^  vkd3d_/d' /build/wined3d/wined3d.def; fi && \
     printf '  wined3d_surface_ddheap\n' >> /build/wined3d/wined3d.def && \
     if [ "$WINE_MAJ" -eq 7 ]; then \
       printf '  wined3d_streaming_buffer_map\n  wined3d_streaming_buffer_unmap\n  wined3d_streaming_buffer_upload\n' >> /build/wined3d/wined3d.def; \
@@ -311,6 +328,7 @@ RUN set -ex && \
       echo "wined3d_OBJS += wined3d/qemu3dfx_streaming_buffer.c.o" >> Makefile; \
     fi && \
     echo "wined3d_OBJS += /build/vk_stubs.o" >> Makefile && \
+    if [ "$WINE_MAJ" -ge 9 ] && [ -f /build/include/vkd3d_shader.h ]; then echo "wined3d_OBJS += /build/vkd3d_stubs.o" >> Makefile; fi && \
     echo "wined3d_OBJS += /build/nocrt_entry.o" >> Makefile && \
     echo "wined3d_OBJS += /build/mingw_matherr_stubs.o" >> Makefile && \
     echo "ddraw_OBJS += ddraw/qemu3dfx_ddraw_hooks.c.o ddraw/qemu3dfx_ddthru.c.o /build/kernel32_compat.o /build/copysign.o /build/libwine_stubs.o /build/mingw_matherr_stubs.o /build/nocrt_entry.o" >> Makefile && \
@@ -332,6 +350,7 @@ RUN set -ex && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/kernel32_compat.o /docker/kernel32_compat.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/copysign.o /docker/copysign.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
+    if [ "$WINE_MAJ" -ge 9 ] && [ -f /build/include/vkd3d_shader.h ]; then i686-w64-mingw32-gcc $CFLAGS_COMPAT -I/build/include -c -o /build/vkd3d_stubs.o /docker/vkd3d_stubs.c; fi && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/libwine_stubs.o /docker/libwine_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/wine_spec_stubs.o /docker/wine_spec_stubs.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/nocrt_entry.o /docker/nocrt_entry.c && \

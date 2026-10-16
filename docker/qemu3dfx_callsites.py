@@ -452,7 +452,7 @@ EDITS = [
     # RGB modes are enumerated.
     ('ddraw/ddraw.c', r'static HRESULT WINAPI ddraw7_EnumDisplayModes\(',
      r'ddrawformat_from_wined3dformat\(&pixelformat, mode\.format_id\);', 'after',
-     'if (wined3d_hal_3dfx() && (!(pixelformat.dwFlags & DDPF_RGB) || pixelformat.u1.dwRGBBitCount != 16))\n'
+     'if (wined3d_hal_3dfx() && (!(pixelformat.dwFlags & DDPF_RGB) || ((const DWORD *)&pixelformat)[3] /* dwRGBBitCount */ != 16))\n'
      '    continue;', ALL),
 
     # ddraw_surface1_Unlock (ref 0x10010d2d; the other versions delegate to it): BlitFpsLimit after the unlock.
@@ -490,7 +490,19 @@ EDITS = [
      '        memset(stub, 0, 0x14);\n'
      '}\n'
      'else\n'
-     '    heap_free(surface);', V678),
+     '    heap_free(surface);', V678 | {'no9'}),
+    # Wine 9 allocates surfaces with calloc() and frees them with free().
+    ('ddraw/surface.c', r'ddraw_surface_wined3d_object_destroyed\(void \*parent\)',
+     r'\bfree\(surface\);', 'replace',
+     'if (wined3d_surface_ddheap())\n'
+     '{\n'
+     '    void *stub = realloc(surface, 0x14);\n'
+     '\n'
+     '    if (stub)\n'
+     '        memset(stub, 0, 0x14);\n'
+     '}\n'
+     'else\n'
+     '    free(surface);', {9}),
 ]
 
 
@@ -921,7 +933,12 @@ def main():
     build, version = sys.argv[1], sys.argv[2]
     major = int(version.split('.')[0])
     minor_key = '.'.join(version.split('.')[:2])       # e.g. '1.9': versions may name a minor
-    todo = [e for e in EDITS if major in e[5] or minor_key in e[5]]
+    # Wine 9 descends directly from 8: an edit for 8 applies to 9 as well
+    # unless it opts out with 'no9' (an anchor that moved still fails below).
+    def wanted(vs):
+        return (major in vs or minor_key in vs
+                or (major >= 9 and 8 in vs and 'no9' not in vs))
+    todo = [e for e in EDITS if wanted(e[5])]
     # bisecting aids: QEMU3DFX_SKIP_WINED3D=1 drops the wined3d edits;
     # QEMU3DFX_ONLY=<i>:<j> keeps only wined3d edits i..j-1 (in list order)
     wd = [e for e in todo if '/' not in e[0]]
