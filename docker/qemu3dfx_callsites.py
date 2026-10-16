@@ -880,6 +880,20 @@ EDITS += [
 ]
 
 
+# ---- Wine 1.8: no GL_APPLE_client_storage (backport of 1.9.1's removal) ----
+# Through qemu-3dfx the guest sees the macOS host's GL extensions, so 1.8
+# enabled GL_APPLE_client_storage and let the host read texture data straight
+# from guest-side surface memory: a dynamic surface rewritten every frame (the
+# 3DMark2000 helicopter HUD) came out duplicated and half uninitialised, also
+# with the reference DLLs. Wine 1.9.1 removed the feature (4287054943); a VM
+# bisect put the fix between 1.9.0 (glitched) and 1.9.1 (clean).
+EDITS += [
+    ('directx.c', r'static BOOL wined3d_adapter_init_gl_caps\(',
+     r'if \(gl_info->supported\[EXT_BLEND_MINMAX\] \|\| gl_info->supported\[EXT_BLEND_SUBTRACT\]\)', 'before',
+     'gl_info->supported[APPLE_CLIENT_STORAGE] = FALSE;', {'1.8'}),
+]
+
+
 def function_span(src, func_re):
     """(start, end) of the body of the first function whose definition
     matches func_re (start at its opening brace, end after its closing one)."""

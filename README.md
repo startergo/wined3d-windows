@@ -242,6 +242,7 @@ output/
 | Wine debug/log symbols in ddraw | Stub via libwine_stubs.c (atexit, wine_get_version, __wine_dbg_*) |
 | AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback (the pattern also covers 5.0's `wined3d_output_cleanup()` call, without which 5.0.5 could not create an adapter) |
 | Wine ≤ 3.0 defines globals in headers (`glEnableWINE`/`glDisableWINE` in `wined3d_gl.h`) | Built with `-fcommon` (GCC ≥ 10 defaults to `-fno-common`, giving each file a private, never-set copy: 3DMark2000 crashed in `context_apply_blit_state`'s `glDisableWINE(GL_FOG)`) |
+| Wine 1.8 uses `GL_APPLE_client_storage`, which the passthrough reports from the macOS host | Disabled for 1.8 (backport of Wine 1.9.1's removal): the host read texture data from guest memory, garbling surfaces rewritten every frame (3DMark2000's helicopter HUD, also with the reference DLLs) |
 | Wine 1.9 never loads `p_wglGetPixelFormat` in its `USE_WIN32_OPENGL` mode | Loaded next to `wglSwapBuffers`, as in 1.8 and 2.0+ (crashed every context creation) |
 | D3DKMT (Vista+ gdi32) needed by Wine ≥1.9 | `d3dkmt_stubs.c`: surface/texture `GetDC` via `CreateCompatibleDC` + `CreateDIBSection` (copy-in/copy-back, as the reference); adapter/device calls succeed, `QueryVideoMemoryInfo` → `STATUS_NOT_IMPLEMENTED` (fake memory info) |
 | PE header incompatibility | patch_pe_win98.py post-processing |

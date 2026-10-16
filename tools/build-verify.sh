@@ -6,6 +6,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 V="${1:?usage: $0 <wine-version>}"
 LINE=$(grep -o "\"$V:[^\"]*\"" build-docker.sh | tr -d '"')
+# Bisect builds: an intermediate 1.9.x uses 1.9.7's settings.
+if [ -z "$LINE" ] && [[ "$V" =~ ^1\.9\.[0-9]+$ ]]; then
+    LINE=$(grep -o "\"1.9.7:[^\"]*\"" build-docker.sh | tr -d '"' | sed "s/^1\.9\.7:/$V:/")
+fi
 [ -n "$LINE" ] || { echo "unknown version $V"; exit 1; }
 IFS=: read WINE_VERSION WINE_BRANCH WINE_EXT BUILD_MSVCRT BUILD_MODE <<< "$LINE"
 OUT="output-verify/$WINE_VERSION"
