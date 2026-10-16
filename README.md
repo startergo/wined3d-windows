@@ -110,6 +110,17 @@ What the call sites do, by setting:
 
 Call sites are in place in wined3d and ddraw for every version, 1.8.7–8.0.2.
 
+Two additions act regardless of settings:
+
+- **Host announcement**: wined3d sends `Wine-<version> Direct3D build …`
+  through `glDebugMessageInsertARB` while probing GL (in
+  `test_pbo_functionality`). qemu-3dfx only treats the guest as Wine
+  Direct3D after this message; without it, games report no 3D accelerator.
+- **`DDCAPS.dwZBufferBitDepths`**: ddraw's `GetCaps` reports the Z-buffer
+  depths, which stock Wine leaves at 0 and older games read: a constant
+  `DDBD_16 | DDBD_24` for 1.8.7–2.0.5, and from 3.0.5 the depths of the HAL
+  device's Z formats (`IDirect3D7::EnumZBufferFormats`), as in the reference.
+
 ### ddraw.dll — ddthru routing, call sites, ddrawwq.dll forwarders
 
 **ddthru** (`qemu3dfx_ddthru.c`): `DirectDrawCreate`, `DirectDrawCreateEx`,
@@ -219,13 +230,18 @@ output/
 | Window class needs CS_OWNDC | Added CS_OWNDC flag to wined3d window class registration |
 | EXCEPTION_REGISTRATION_RECORD Prev vs Next | Copy Wine's exception.h, patch frame->Prev→frame->prev |
 | Vulkan backend not needed on Win98 | Vulkan sources never linked; vk_stubs.c provides their entry points |
-| Wine-built msvcrt.dll shadows Win98's and imports symbols 98 lacks | No bundled msvcrt.dll (6.0.4 used to ship one); every version links against Win98's own MSVCRT |
-| wined3d's hidden windows use a DLL-registered class (found on Win9x only with the registering instance) | The DLL instance is passed as `CreateWindowA`'s `hInstance`, as the reference does |
+| C runtime | All four DLLs link against Win98's own `msvcrt.dll`, like the reference DLLs (no bundled msvcrt.dll — 6.0.4 used to ship one that imports symbols 98 lacks). The hand-written CRT replacement used before (`heap_compat.c`) is gone: it caused self-recursive `memset`/`strlen` and a `printf` without widths or precision |
+| `vsnprintf` family | `mingw_matherr_stubs.c` forwards `_vsnprintf`/`__ms_vsnprintf` to msvcrt's (resolved at runtime) and implements `_vscprintf` (missing in Win98's msvcrt 6). These used to be stubs returning an empty string, so every GLSL shader was generated empty and 3D rendered black |
+| `FreeLibraryAndExitThread` | Win98's own (an earlier busy-loop stub made wined3d's worker thread spin forever); the command-stream worker thread stays disabled, as in the reference |
+| Version resources | `gen_version_rc.py` gives each DLL the reference's version info (e.g. ddraw 4.09.00.0904); games check it ("needs DirectX 6.1") |
+| Stale wine9x headers (`rbtree.h`, `wgl.h`, `wgl_driver.h`, `list.h`) | Each Wine version's own headers are used. wine9x's old `rbtree.h` API made every device creation crash on Wine ≥ 2.0 |
+| Hidden windows use a DLL-registered class (found on Win9x only with the registering instance) | wined3d and ddraw pass their DLL instance as `CreateWindowA`'s `hInstance`, as the reference does (without it every ddraw swapchain failed and nothing was presented) |
 | vkd3d library (Wine 8.0+) not needed | Remove includes, callbacks, and debug channels from wined3d_main.c |
 | WGL query renderer extensions missing | Remove USE_GL_FUNC entries, null out supported[] blocks |
 | GL extension naming mismatch | Add EXT suffix (glPolygonOffsetClamp→EXT, GL_TEXTURE_MAX_ANISOTROPY→_EXT) |
 | Wine debug/log symbols in ddraw | Stub via libwine_stubs.c (atexit, wine_get_version, __wine_dbg_*) |
-| AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback |
+| AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback (the pattern also covers 5.0's `wined3d_output_cleanup()` call, without which 5.0.5 could not create an adapter) |
+| Wine 1.9 never loads `p_wglGetPixelFormat` in its `USE_WIN32_OPENGL` mode | Loaded next to `wglSwapBuffers`, as in 1.8 and 2.0+ (crashed every context creation) |
 | D3DKMT (Vista+ gdi32) needed by Wine ≥1.9 | `d3dkmt_stubs.c`: surface/texture `GetDC` via `CreateCompatibleDC` + `CreateDIBSection` (copy-in/copy-back, as the reference); adapter/device calls succeed, `QueryVideoMemoryInfo` → `STATUS_NOT_IMPLEMENTED` (fake memory info) |
 | PE header incompatibility | patch_pe_win98.py post-processing |
 | Import name decorations | strip_import_decorations.py post-processing |
@@ -248,7 +264,9 @@ docker/
   vk_stubs.c                  Vulkan stub functions (never called on Win98)
   libwine_stubs.c             Wine debug/log stubs for ddraw (atexit, wine_get_version, __wine_dbg_*)
   d3dkmt_stubs.c              D3DKMT for Win9x: GDI-based DCs from memory, adapter/device stubs
-  mingwex_stubs.c             MinGW math stubs
+  mingw_matherr_stubs.c       MinGW internals for the -nostdlib link: real _vsnprintf/_vscprintf, math stubs
+  gen_version_rc.py           Version resources matching the reference DLLs
+  debug_serial.py             DEBUG_LOG=1 builds: ERR/WARN/FIXME to the guest's COM1
   patch_pe_win98.py           PE header patching for Win98
   strip_import_decorations.py Strip @N from PE import names
 tests/                        Host unit tests (make test) with Win32 mocks
@@ -258,6 +276,8 @@ tools/
   win98-calldiff.py           Disassemble two PEs and diff their calls / runtime lookups
   build-verify.sh             Build one Wine version into output-verify/ without touching output/
   re/                         Reverse-engineering helpers and CALLSITES.md (call-site map)
+  capsdump/                   Guest tool: dumps DDCAPS, D3D devices and Z formats to COM1
+  glprof/                     Guest opengl32 proxy: per-frame GL call counts to COM1
 wine9x-support/               Wine 1.7.55 build infrastructure
   Makefile                    Build system template (compiles all four DLLs)
   compact/                    Compatibility helpers (debug.c, exception.asm)
@@ -283,6 +303,22 @@ reference DLLs extracted once with `tests/emu/extract-reference.sh` — see
 `tools/win98-universe.py check output/<ver>/*.dll` verifies every import
 against a stock Win98 SE system and `tools/win98-calldiff.py` compares calls
 with the reference build.
+
+### In a Win98 SE VM (qemu-3dfx)
+
+Built DLLs are also checked in a Windows 98 SE guest against the reference
+DLLs:
+
+- `tools/capsdump` runs DirectDraw/Direct3D enumeration with each DLL pair
+  and writes the result to COM1. All nine versions (1.8.7–8.0.2) report
+  output identical to their reference and exit cleanly.
+- 3DMark 99 Max and 3DMark2000 complete the full benchmark with the 6.0.4
+  build (2726 and 4357 3DMarks; reference 2612 and 3899 in the same VM).
+- `tools/glprof` (an `opengl32.dll` proxy in front of the qemu-3dfx wrapper)
+  counts GL calls per frame; diffing the reference's and ours located the
+  empty-`vsnprintf` bug.
+- A debug build (`DEBUG_LOG=1` build argument) sends Wine's ERR/WARN/FIXME
+  messages to the guest's COM1.
 
 ## Credits
 
