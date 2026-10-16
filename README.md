@@ -241,6 +241,7 @@ output/
 | GL extension naming mismatch | Add EXT suffix (glPolygonOffsetClamp→EXT, GL_TEXTURE_MAX_ANISOTROPY→_EXT) |
 | Wine debug/log symbols in ddraw | Stub via libwine_stubs.c (atexit, wine_get_version, __wine_dbg_*) |
 | AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback (the pattern also covers 5.0's `wined3d_output_cleanup()` call, without which 5.0.5 could not create an adapter) |
+| Wine ≤ 3.0 defines globals in headers (`glEnableWINE`/`glDisableWINE` in `wined3d_gl.h`) | Built with `-fcommon` (GCC ≥ 10 defaults to `-fno-common`, giving each file a private, never-set copy: 3DMark2000 crashed in `context_apply_blit_state`'s `glDisableWINE(GL_FOG)`) |
 | Wine 1.9 never loads `p_wglGetPixelFormat` in its `USE_WIN32_OPENGL` mode | Loaded next to `wglSwapBuffers`, as in 1.8 and 2.0+ (crashed every context creation) |
 | D3DKMT (Vista+ gdi32) needed by Wine ≥1.9 | `d3dkmt_stubs.c`: surface/texture `GetDC` via `CreateCompatibleDC` + `CreateDIBSection` (copy-in/copy-back, as the reference); adapter/device calls succeed, `QueryVideoMemoryInfo` → `STATUS_NOT_IMPLEMENTED` (fake memory info) |
 | PE header incompatibility | patch_pe_win98.py post-processing |
@@ -312,8 +313,9 @@ DLLs:
 - `tools/capsdump` runs DirectDraw/Direct3D enumeration with each DLL pair
   and writes the result to COM1. All nine versions (1.8.7–8.0.2) report
   output identical to their reference and exit cleanly.
-- 3DMark 99 Max and 3DMark2000 complete the full benchmark with the 6.0.4
-  build (2726 and 4357 3DMarks; reference 2612 and 3899 in the same VM).
+- 3DMark 99 Max completes with the 6.0.4 build (2726; reference 2612), and
+  3DMark2000 with 2.0.5, 4.12.1, 6.0.4 and 8.0.2 (3902, 4656, 4357, 4090;
+  references 4195 for 2.0.5 and 3899 for 6.0.4, all in the same VM).
 - `tools/glprof` (an `opengl32.dll` proxy in front of the qemu-3dfx wrapper)
   counts GL calls per frame; diffing the reference's and ours located the
   empty-`vsnprintf` bug.

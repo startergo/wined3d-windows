@@ -425,6 +425,7 @@ setup_cflags() {
     CFLAGS_LIST=(
         -DQEMU3DFX_WINE_MAJOR="$qmaj" -DQEMU3DFX_WINE_MINOR="${qrest%%.*}"
         -std=c99
+        -fcommon   # Wine <= 3.0 defines globals in headers (glEnableWINE/glDisableWINE); GCC >= 10 gives each file its own copy
         -O3
         -fomit-frame-pointer
         -Wno-discarded-qualifiers

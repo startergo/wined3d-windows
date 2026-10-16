@@ -82,7 +82,7 @@ RUN set -ex && \
     sed -i 's|-Imingw -Iinclude -Iinclude/wine|-Iinclude -Iinclude/wine -Imingw|g; s|-Imingw -Iinclude/wine -Iinclude|-Iinclude -Iinclude/wine -Imingw|g' /build/Makefile && \
     sed -i 's|^[[:space:]]*CFLAGS = -std=c99|CFLAGS = -I/docker -std=c99|' /build/Makefile && \
     printf '#ifndef ARRAY_SIZE\n#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))\n#endif\n' > /build/include/array_size.h && \
-    sed -i 's|CFLAGS = -I/docker -std=c99|CFLAGS = -I/docker -std=c99 -include include/array_size.h|' /build/Makefile && \
+    sed -i 's|CFLAGS = -I/docker -std=c99|CFLAGS = -I/docker -std=c99 -fcommon -include include/array_size.h|' /build/Makefile && \
     true "=== Wine 6.0+ macros not in wine9x headers ===" && \
     printf '#ifndef DECLSPEC_HOTPATCH\n#define DECLSPEC_HOTPATCH\n#endif\n' >> /build/include/array_size.h && \
     printf '#ifndef InterlockedExchangeAddSizeT\n#define InterlockedExchangeAddSizeT(a,b) InterlockedExchangeAdd((LONG*)(a),(b))\n#endif\n' >> /build/include/array_size.h && \
