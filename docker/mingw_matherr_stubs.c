@@ -88,13 +88,20 @@ int __ms_vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
 
 /* _recalloc - Wine >= 10's wined3d uses it; it arrived with msvcr80, so Win98's
  * msvcrt (and MinGW's msvcrt import library) lack it. realloc + zeroing of the
- * new tail, sized with _msize (which Win98's msvcrt has). Called through the
- * import table, hence the __imp_ pointer. */
+ * new tail, sized by the allocator that owns the block (below). Called through
+ * the import table, hence the __imp_ pointer. */
 #include <malloc.h>
 #include <string.h>
+/* The block's size must come from the allocator that owns it: the CI links
+ * pthread9x's memory.o into wined3d, whose malloc/realloc/free replace
+ * msvcrt's - and msvcrt's _msize on such a block returns garbage (the zeroing
+ * then corrupted wined3d's arrays: a crash freeing a query in 3DMark2000).
+ * memory.o exports _msize_int; the weak reference is null without it. */
+size_t _msize_int(void *) __attribute__((weak));
+
 void *__cdecl compat_recalloc(void *p, size_t num, size_t size)
 {
-    size_t old = p ? _msize(p) : 0, new_size;
+    size_t old = p ? (_msize_int ? _msize_int(p) : _msize(p)) : 0, new_size;
     void *q;
 
     if (size && num > (size_t)-1 / size)
