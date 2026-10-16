@@ -1,3 +1,4 @@
 [submodule "wine9x-support"]
 	path = wine9x-support
 	url = https://github.com/crag-hack/wine9x.git
+	ignore = untracked

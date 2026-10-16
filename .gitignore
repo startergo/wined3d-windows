@@ -29,3 +29,13 @@ re-work/
 # local Wine source trees and tool state
 .wine-src/
 .serena/
+
+# Build outputs and local folders
+tools/capsdump/capsdump.exe
+tools/glprof/glprof.c
+tools/glprof/glprof.def
+tools/glprof/stubs.s
+tools/glprof/opengl32.dll
+agents/
+vc6/
+.DS_Store
