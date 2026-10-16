@@ -390,6 +390,9 @@ setup_cflags() {
     for _wglfile in "$wine_src/dlls/wined3d/directx.c" "$wine_src/dlls/wined3d/adapter_gl.c"; do
         [ -f "$_wglfile" ] || continue
         perl -pi -e 'if (/p_wglSwapBuffers\s*=.*GetProcAddress\(mod_gl/) { $_ .= "        gl_info->gl_ops.wgl.p_wglCopyContext         = (void *)GetProcAddress(mod_gl, \"wglCopyContext\");\n" . "        gl_info->gl_ops.wgl.p_wglDescribePixelFormat = (void *)GetProcAddress(mod_gl, \"wglDescribePixelFormat\");\n" . "        gl_info->gl_ops.wgl.p_wglGetProcAddress      = (void *)GetProcAddress(mod_gl, \"wglGetProcAddress\");\n" . "        gl_info->gl_ops.wgl.p_wglMakeCurrent         = (void *)GetProcAddress(mod_gl, \"wglMakeCurrent\");\n" . "        gl_info->gl_ops.wgl.p_wglSetPixelFormat      = (void *)GetProcAddress(mod_gl, \"wglSetPixelFormat\");\n" . "        gl_info->gl_ops.wgl.p_wglShareLists          = (void *)GetProcAddress(mod_gl, \"wglShareLists\");\n" }' "$_wglfile"
+        # Wine 10 dropped p_wglDescribePixelFormat from the WGL table
+        grep -q 'p_wglDescribePixelFormat' "$wine_src/include/wine/wgl_driver.h" 2>/dev/null || \
+            sed -i '/gl_ops\.wgl\.p_wglDescribePixelFormat/d' "$_wglfile"
         echo "  Patched WGL function loading in $(basename "$_wglfile")"
     done
 
@@ -434,7 +437,7 @@ setup_cflags() {
     # NONAMELESSUNION); wine9x's mingw headers hard-code u1..u5/s. Use per-build
     # copies with anonymous unions (wine9x-support itself stays untouched: the
     # same run may build older versions), plus vkd3d's headers for wined3d.
-    local ver9_inc=() ver9_after=()
+    local ver9_inc=() ver9_after=() ver10_inc=()
     if [ "$qmaj" -ge 9 ]; then
         mkdir -p "$wine_src/.mingw-anon"
         for h in ddraw.h d3dtypes.h d3d8types.h; do
@@ -447,6 +450,13 @@ setup_cflags() {
             echo '/* placeholder: MinGW winnt.h declares RtlUnwind and friends */' > "$wine_src/.mingw-anon/rtlsupportapi.h"
         fi
         ver9_inc=(-I"$wine_src/.mingw-anon")
+        if [ "$qmaj" -ge 10 ]; then
+            # Wine >= 10 calls _recalloc; MSYS2's headers declare it only for
+            # msvcr80+ (our compat layer provides __imp___recalloc)
+            printf '#include <stddef.h>\n__declspec(dllimport) void *__cdecl _recalloc(void *, size_t, size_t);\n' \
+                > "$wine_src/.mingw-anon/recalloc_decl.h"
+            ver10_inc=(-include "$wine_src/.mingw-anon/recalloc_decl.h")
+        fi
         ver9_after=(-idirafter "$wine_src/libs/vkd3d/include")
         # wined3d_pause yields with NtDelayExecution (timeout 0); Win98's ntdll lacks it
         sed -i 's/NtDelayExecution(FALSE, &timeout);/{ (void)timeout; Sleep(0); }/' \
@@ -492,6 +502,7 @@ setup_cflags() {
 
         # Include paths — wine9x core, then wine9x wine/ and Wine stock as last resort
         "${ver9_inc[@]}"
+        "${ver10_inc[@]}"
         -I"$WINE9X/mingw"
         -I"$WINE9X/include/wine"
         -I"$WINE9X/compact"
