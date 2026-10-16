@@ -420,8 +420,13 @@ setup_cflags() {
     fi
 
     # ── Add wglext.h to all wined3d .c files after wined3d_private.h ──
+    # (not for Wine >= 9: wined3d_private.h no longer pulls in wined3d_gl.h, so
+    # the GL types are not defined there yet - and Wine 9's wgl.h already carries
+    # the WGL extensions; wined3d_gl.h still gets wglext.h after wgl.h below)
+    if [ "${version%%.*}" -lt 9 ]; then
     find "$wine_src/dlls/wined3d" -name '*.c' -exec grep -l 'wined3d_private\.h' {} \; | \
         xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true
+    fi
 
     local qmaj="${version%%.*}" qrest="${version#*.}"
     # Wine >= 9 writes DirectDraw/D3D union members without names (it dropped

@@ -33,6 +33,7 @@ Win98 loading.
 | 6.0.4 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
 | 7.0.2 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
 | 8.0.2 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
+| 9.0.1 | E | 30 | Same files as 8.0.2; needs vkd3d-shader headers (library stubbed) |
 
 The Vulkan sources (`adapter_vk.c`, `context_vk.c`, `shader_spirv.c`) are
 never linked — Win98 has no Vulkan; `docker/vk_stubs.c` provides their entry
@@ -108,7 +109,10 @@ What the call sites do, by setting:
 | `BlitFpsLimit` / `FlipFpsLimit` | frame limiter in `Unlock` / `Flip` (Flip: Wine ≤ 3.x) |
 | `DDSurfaceHeap` | released surfaces keep a zeroed stub instead of being freed (6.0+) |
 
-Call sites are in place in wined3d and ddraw for every version, 1.8.7–8.0.2.
+Call sites are in place in wined3d and ddraw for every version, 1.8.7–9.0.1.
+qemu-3dfx's references end at 8.0.2, so 9.0.1 reuses 8.0.2's call sites (all
+43 anchors match; `DDSurfaceHeap` uses `calloc`/`free` there, like Wine 9's
+ddraw) and is validated in the VM only, not against a reference binary.
 
 Two additions act regardless of settings:
 
@@ -191,6 +195,7 @@ docker rm extract
 | B | 3.0.5 | 3.0 | tar.xz |
 | C | 4.12.1, 5.0.5 | 4.12, 5.0 | tar.xz |
 | D | 6.0.4, 7.0.2, 8.0.2 | 6.0, 7.0, 8.0 | tar.xz |
+| E | 9.0.1 | 9.0 | tar.xz |
 
 ### CI / MSYS2 (`build-ci.sh`)
 
@@ -241,6 +246,7 @@ output/
 | GL extension naming mismatch | Add EXT suffix (glPolygonOffsetClamp→EXT, GL_TEXTURE_MAX_ANISOTROPY→_EXT) |
 | Wine debug/log symbols in ddraw | Stub via libwine_stubs.c (atexit, wine_get_version, __wine_dbg_*) |
 | AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback (the pattern also covers 5.0's `wined3d_output_cleanup()` call, without which 5.0.5 could not create an adapter) |
+| Wine ≥ 9 (vkd3d-shader, `NtDelayExecution`, nameless unions) | wined3d calls vkd3d-shader only for Direct3D 10+ shaders, the Vulkan backend and debug disassembly: `docker/vkd3d_stubs.c` stands in for the library and wined3d's vkd3d re-exports are dropped. `wined3d_pause`'s `NtDelayExecution` (timeout 0, missing from Win98's ntdll) becomes `Sleep(0)`. Wine 9 writes DirectDraw/D3D union members without names, so wine9x's MinGW headers get anonymous unions for 9.x builds |
 | Wine ≤ 3.0 defines globals in headers (`glEnableWINE`/`glDisableWINE` in `wined3d_gl.h`) | Built with `-fcommon` (GCC ≥ 10 defaults to `-fno-common`, giving each file a private, never-set copy: 3DMark2000 crashed in `context_apply_blit_state`'s `glDisableWINE(GL_FOG)`) |
 | Wine 1.8 uses `GL_APPLE_client_storage`, which the passthrough reports from the macOS host | Disabled for 1.8 (backport of Wine 1.9.1's removal): the host read texture data from guest memory, garbling surfaces rewritten every frame (3DMark2000's helicopter HUD, also with the reference DLLs) |
 | Wine 1.9 never loads `p_wglGetPixelFormat` in its `USE_WIN32_OPENGL` mode | Loaded next to `wglSwapBuffers`, as in 1.8 and 2.0+ (crashed every context creation) |
@@ -312,11 +318,13 @@ Built DLLs are also checked in a Windows 98 SE guest against the reference
 DLLs:
 
 - `tools/capsdump` runs DirectDraw/Direct3D enumeration with each DLL pair
-  and writes the result to COM1. All nine versions (1.8.7–8.0.2) report
+  and writes the result to COM1. All nine versions with a reference (1.8.7–8.0.2) report
   output identical to their reference and exit cleanly.
 - 3DMark 99 Max completes with the 6.0.4 build (2726; reference 2612), and
-  3DMark2000 with 2.0.5, 4.12.1, 6.0.4 and 8.0.2 (3902, 4656, 4357, 4090;
-  references 4195 for 2.0.5 and 3899 for 6.0.4, all in the same VM).
+  3DMark2000 with every version (1.8.7 3272, 1.9.7 4016, 2.0.5 3902,
+  3.0.5 4216, 4.12.1 4656, 6.0.4 4357, 8.0.2 4090, 9.0.1 3712; references
+  4195 for 2.0.5 and 3899 for 6.0.4, all in the same VM). 9.0.1's capsdump
+  output is identical to the 8.0.2 reference.
 - `tools/glprof` (an `opengl32.dll` proxy in front of the qemu-3dfx wrapper)
   counts GL calls per frame; diffing the reference's and ours located the
   empty-`vsnprintf` bug.
