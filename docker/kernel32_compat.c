@@ -69,6 +69,34 @@ BOOL __stdcall GetModuleHandleExW(DWORD flags, LPCWSTR name, HMODULE *module)
     return *module != 0;
 }
 
+/* --- GetModuleHandleExA (kernel32, XP+ - not on Win98; Wine >= 10) ---
+ * FROM_ADDRESS: the allocation base of the address is the module handle
+ * (VirtualQuery works on Win98). Reference counting is not emulated. */
+typedef struct { void *BaseAddress; void *AllocationBase; DWORD AllocationProtect;
+                 unsigned long RegionSize; DWORD State, Protect, Type; } MBI98;
+unsigned long __stdcall VirtualQuery(const void *, MBI98 *, unsigned long);
+BOOL __stdcall GetModuleHandleExA(DWORD flags, const char *name, HMODULE *module)
+{
+    if(!module) return 0;
+    if(flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
+        MBI98 mbi;
+        if(!VirtualQuery(name, &mbi, sizeof(mbi)) || !mbi.AllocationBase) { *module = 0; return 0; }
+        *module = (HMODULE)mbi.AllocationBase;
+        return 1;
+    }
+    *module = GetModuleHandleA(name);
+    return *module != 0;
+}
+
+/* --- InitializeCriticalSectionEx (Vista+; Wine >= 10's wined3d lock init) ---
+ * Spin count and flags (debug info) have no Win98 equivalent. */
+void __stdcall InitializeCriticalSection(void *);
+BOOL __stdcall InitializeCriticalSectionEx(void *cs, DWORD spin, DWORD flags)
+{
+    InitializeCriticalSection(cs);
+    return 1;
+}
+
 /* --- HeapCreate stub (returns process heap) --- */
 void *__stdcall GetProcessHeap(void);
 void *__stdcall HeapCreate(unsigned long flOptions, unsigned long dwInitialSize, unsigned long dwMaximumSize)
@@ -108,6 +136,14 @@ __asm__("\n"
     ".align 4\n"
     "__imp__GetModuleHandleExW@12:\n"
     "    .long _GetModuleHandleExW@12\n"
+    ".globl __imp__GetModuleHandleExA@12\n"
+    ".align 4\n"
+    "__imp__GetModuleHandleExA@12:\n"
+    "    .long _GetModuleHandleExA@12\n"
+    ".globl __imp__InitializeCriticalSectionEx@12\n"
+    ".align 4\n"
+    "__imp__InitializeCriticalSectionEx@12:\n"
+    "    .long _InitializeCriticalSectionEx@12\n"
     ".globl __imp__GlobalMemoryStatusEx@4\n"
     ".align 4\n"
     "__imp__GlobalMemoryStatusEx@4:\n"

@@ -157,6 +157,10 @@ RUN set -ex && \
     true "=== Copy Wine headers needed by ddraw/d3d8/d3d9 ===" && \
     cp /tmp/wine-${WINE_VERSION}/include/wine/exception.h /build/include/wine/ 2>/dev/null || true && \
     sed -i 's/frame->Prev/frame->prev/g; s/(frame->Prev)/(frame->prev)/g' /build/include/wine/exception.h && \
+    true "Wine >= 10's exception.h includes rtlsupportapi.h (not in MinGW); what it needs (RtlUnwind etc.) comes from MinGW's winnt.h - placeholder" && \
+    if [ -f /tmp/wine-${WINE_VERSION}/include/rtlsupportapi.h ] && [ ! -f /build/include/rtlsupportapi.h ]; then \
+      echo '/* placeholder: MinGW winnt.h declares RtlUnwind and friends */' > /build/include/rtlsupportapi.h; \
+    fi && \
     true "unicode.h: keep wine9x version (more portable, no __ms_va_list/FORCEINLINE)" && \
     for f in /tmp/wine-${WINE_VERSION}/include/wine/*.h; do \
       target=/build/include/wine/$(basename "$f"); \
@@ -168,6 +172,11 @@ RUN set -ex && \
     for h in wgl.h wgl_driver.h list.h; do \
       [ -f /tmp/wine-${WINE_VERSION}/include/wine/$h ] && cp /tmp/wine-${WINE_VERSION}/include/wine/$h /build/include/wine/$h; \
     done && \
+    true "Wine >= 10: wined3d_vk.h (included widely, Vulkan backend never linked) uses newer Vulkan entry points - Wine's own wine/vulkan.h (also over /docker/wine/vulkan.h, which -I/docker puts first)" && \
+    if [ "$WINE_MAJ" -ge 10 ] && [ -f /tmp/wine-${WINE_VERSION}/include/wine/vulkan.h ]; then \
+      cp /tmp/wine-${WINE_VERSION}/include/wine/vulkan.h /build/include/wine/vulkan.h; \
+      cp /tmp/wine-${WINE_VERSION}/include/wine/vulkan.h /docker/wine/vulkan.h; \
+    fi && \
     true "Wine >= 9: wined3d includes the bundled vkd3d-shader headers (types only; docker/vkd3d_stubs.c stands in for the library)" && \
     if [ "$WINE_MAJ" -ge 9 ] && [ -f /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_shader.h ]; then \
       cp /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_shader.h /tmp/wine-${WINE_VERSION}/libs/vkd3d/include/vkd3d_types.h /build/include/; \
@@ -319,6 +328,9 @@ RUN set -ex && \
     echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
     [ -f wined3d/adapter_gl.c ] && echo "wined3d_OBJS += wined3d/adapter_gl.c.o" >> Makefile || true && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
+    true "Wine >= 10 splits the fixed-function code into ffp_gl.c (GL state) and ffp_hlsl.c (opt-in HLSL pipeline)" && \
+    [ -f wined3d/ffp_gl.c ] && echo "wined3d_OBJS += wined3d/ffp_gl.c.o" >> Makefile || true && \
+    [ -f wined3d/ffp_hlsl.c ] && echo "wined3d_OBJS += wined3d/ffp_hlsl.c.o" >> Makefile || true && \
     [ -f wined3d/adapter_vk.c ] && echo "wined3d_OBJS += wined3d/adapter_vk.c.o" >> Makefile || true && \
     [ -f wined3d/context_vk.c ] && echo "wined3d_OBJS += wined3d/context_vk.c.o" >> Makefile || true && \
     [ -f wined3d/shader_spirv.c ] && echo "wined3d_OBJS += wined3d/shader_spirv.c.o" >> Makefile || true && \
@@ -387,6 +399,8 @@ RUN set -ex && \
     true "=== Pre-compile Wine 6.0+ GL source files via make pattern rule ===" && \
     [ -f wined3d/adapter_gl.c ] && make wined3d/adapter_gl.c.o || true && \
     [ -f wined3d/context_gl.c ] && make wined3d/context_gl.c.o || true && \
+    [ -f wined3d/ffp_gl.c ] && make wined3d/ffp_gl.c.o || true && \
+    [ -f wined3d/ffp_hlsl.c ] && make wined3d/ffp_hlsl.c.o || true && \
     [ -f wined3d/adapter_vk.c ] && make wined3d/adapter_vk.c.o || true && \
     [ -f wined3d/context_vk.c ] && make wined3d/context_vk.c.o || true && \
     [ -f wined3d/shader_spirv.c ] && make wined3d/shader_spirv.c.o || true && \

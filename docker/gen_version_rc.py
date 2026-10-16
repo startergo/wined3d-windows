@@ -25,7 +25,7 @@ if os.path.exists(common):
     if m:
         copyright_ = m.group(0)
 
-nums = [int(x) for x in re.findall(r'\d+', version)][:3] + [0]
+nums = ([int(x) for x in re.findall(r'\d+', version)] + [0, 0, 0])[:3] + [0]   # '10.0' -> 10,0,0,0
 DLLS = {
     'ddraw':   ('Wine DirectDraw', '4.09.00.0904', (4, 9, 0, 904), 'Wine'),
     'd3d8':    ('Wine Direct3D',   '5.3.1.904',    (5, 3, 1, 904), 'Wine'),

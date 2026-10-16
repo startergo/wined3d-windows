@@ -22,6 +22,7 @@ VERSIONS=(
     "7.0.2:7.0:tar.xz"
     "8.0.2:8.0:tar.xz"
     "9.0.1:9.0:tar.xz"
+    "10.0:10.0:tar.xz"
 )
 
 FORCE=0
@@ -440,6 +441,11 @@ setup_cflags() {
             sed -E 's/\} u([0-9]*);/} DUMMYUNIONNAME\1;/; s/\} s([0-9]*);/} DUMMYSTRUCTNAME\1;/' \
                 "$WINE9X/mingw/$h" > "$wine_src/.mingw-anon/$h"
         done
+        # Wine >= 10's exception.h includes rtlsupportapi.h (not in MinGW; what
+        # it needs comes from MinGW's winnt.h)
+        if [ -f "$wine_src/include/rtlsupportapi.h" ]; then
+            echo '/* placeholder: MinGW winnt.h declares RtlUnwind and friends */' > "$wine_src/.mingw-anon/rtlsupportapi.h"
+        fi
         ver9_inc=(-I"$wine_src/.mingw-anon")
         ver9_after=(-idirafter "$wine_src/libs/vkd3d/include")
         # wined3d_pause yields with NtDelayExecution (timeout 0); Win98's ntdll lacks it

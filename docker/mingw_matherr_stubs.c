@@ -85,3 +85,30 @@ int __ms_vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
 {
     return _vsnprintf(buf, size, fmt, ap);
 }
+
+/* _recalloc - Wine >= 10's wined3d uses it; it arrived with msvcr80, so Win98's
+ * msvcrt (and MinGW's msvcrt import library) lack it. realloc + zeroing of the
+ * new tail, sized with _msize (which Win98's msvcrt has). Called through the
+ * import table, hence the __imp_ pointer. */
+#include <malloc.h>
+#include <string.h>
+void *__cdecl compat_recalloc(void *p, size_t num, size_t size)
+{
+    size_t old = p ? _msize(p) : 0, new_size;
+    void *q;
+
+    if (size && num > (size_t)-1 / size)
+        return NULL;
+    new_size = num * size;
+    if (!(q = realloc(p, new_size)) && new_size)
+        return NULL;
+    if (q && new_size > old)
+        memset((char *)q + old, 0, new_size - old);
+    return q;
+}
+__asm__(".section .rdata,\"dr\"\n"
+        ".align 4\n"
+        ".globl __imp___recalloc\n"
+        "__imp___recalloc:\n"
+        "    .long _compat_recalloc\n"
+        ".text\n");

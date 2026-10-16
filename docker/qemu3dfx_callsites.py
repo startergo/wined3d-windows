@@ -318,6 +318,8 @@ EDITS = [
      '        || wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER))\n'
      '    return dst_location;', V678),
 
+    # (Wine 10 removed draw_textured_quad - its FFP blitter forwards to the
+    # GLSL blitter, which draws with draw_shaded_quad: 'no10'.)
     # wined3d_context_gl_draw_textured_quad / _draw_shaded_quad (ref
     # 0x10027e6d, 0x1002adb2): a blit of the presented frame from (0,0) is
     # drawn with the viewport stretched to the screen (ScaleWindow can also
@@ -332,7 +334,7 @@ EDITS = [
      '            && qemu3dfx_window.right >= src_rect->right && qemu3dfx_window.bottom >= src_rect->bottom)\n'
      '        gl_info->gl_ops.gl.p_glViewport(qemu3dfx_screen.left, qemu3dfx_screen.top,\n'
      '                qemu3dfx_screen.right, qemu3dfx_screen.bottom);\n'
-     '}', V678),
+     '}', V678 | {'no10'}),
     ('context_gl.c', r'void wined3d_context_gl_draw_textured_quad\(',
      r'wined3d_context_gl_bind_texture\(context_gl, info\.bind_target, 0\);', 'after',
      'if (!src_rect->top && !src_rect->left && qemu3dfx_latch1_on_swapchain())\n'
@@ -342,7 +344,7 @@ EDITS = [
      '    if (qemu3dfx_scale_window(&qemu3dfx_window, NULL, NULL)\n'
      '            && qemu3dfx_window.right >= src_rect->right && qemu3dfx_window.bottom >= src_rect->bottom)\n'
      '        gl_info->gl_ops.gl.p_glViewport(src_rect->left, src_rect->top, src_rect->right, src_rect->bottom);\n'
-     '}', V678),
+     '}', V678 | {'no10'}),
     ('context_gl.c', r'void wined3d_context_gl_draw_shaded_quad\(',
      r'texture2d_get_blt_info\(texture_gl, sub_resource_idx, src_rect, &info\);', 'before',
      'if (!src_rect->top && !src_rect->left && qemu3dfx_latch1_on_swapchain())\n'
@@ -502,7 +504,7 @@ EDITS = [
      '        memset(stub, 0, 0x14);\n'
      '}\n'
      'else\n'
-     '    free(surface);', {9}),
+     '    free(surface);', {'from9'}),
 ]
 
 
@@ -906,6 +908,17 @@ EDITS += [
 ]
 
 
+# ---- Wine >= 10: dwMaxVertexCount 65536, like the reference -------------------
+# Wine 10 lowered D3DDEVICEDESC.dwMaxVertexCount to 2048 (what Win9x drivers
+# reported; Windows never enforces it). The qemu-3dfx reference (8.0.2) and
+# Wine <= 9 report 65536 - and DirectX 3-6 titles that honour the value split
+# their geometry into more draws, which costs dearly under CPU emulation.
+EDITS += [
+    ('ddraw/ddraw.c', r'void ddraw_d3dcaps1_from_7\(', r'caps1->dwMaxVertexCount = 2048;', 'replace',
+     'caps1->dwMaxVertexCount = 65536;', {'from10'}),
+]
+
+
 def function_span(src, func_re):
     """(start, end) of the body of the first function whose definition
     matches func_re (start at its opening brace, end after its closing one)."""
@@ -936,8 +949,12 @@ def main():
     # Wine 9 descends directly from 8: an edit for 8 applies to 9 as well
     # unless it opts out with 'no9' (an anchor that moved still fails below).
     def wanted(vs):
+        if major >= 10 and 'no10' in vs:
+            return False
         return (major in vs or minor_key in vs
-                or (major >= 9 and 8 in vs and 'no9' not in vs))
+                or (major >= 9 and 8 in vs and 'no9' not in vs)
+                or (major >= 9 and 'from9' in vs)
+                or (major >= 10 and 'from10' in vs))
     todo = [e for e in EDITS if wanted(e[5])]
     # bisecting aids: QEMU3DFX_SKIP_WINED3D=1 drops the wined3d edits;
     # QEMU3DFX_ONLY=<i>:<j> keeps only wined3d edits i..j-1 (in list order)
@@ -959,6 +976,10 @@ def main():
     files = {}
     failed = []
     for fname, func_re, anchor_re, where, code, _ in todo:
+        if major >= 10:
+            # Wine 10 removed the offscreen rendering mode setting (always FBO),
+            # so the backbuffer-ORM condition some sites test is just false.
+            code = code.replace('wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER', 'FALSE')
         path = os.path.join(build, fname) if '/' in fname else os.path.join(build, 'wined3d', fname)
         src = files.get(path) or open(path).read()
         span = function_span(src, func_re)
