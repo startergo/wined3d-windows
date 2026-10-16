@@ -21,6 +21,7 @@ VERSIONS=(
     "6.0.4:6.0:tar.xz"
     "7.0.2:7.0:tar.xz"
     "8.0.2:8.0:tar.xz"
+    "9.0.1:9.0:tar.xz"
 )
 
 FORCE=0
@@ -229,9 +230,10 @@ generate_def() {
         sed -E 's/^\s*@\s+(stdcall|cdecl)(\s+-(noname|ordinal|stub|ignore))*\s+([A-Za-z_][A-Za-z0-9_]*).*/\4/' | \
         grep -v '^$' >> "$def_file"
 
-    # wined3d: no special filtering (vkd3d stubs are in wine_spec_stubs.c)
-    if [ "$dll_name" = "wined3d" ]; then
-        true
+    # wined3d: Wine >= 9 re-exports vkd3d for its D3D10-12 DLLs (absent on
+    # Win98); drop those (8.0's are stubbed in wine_spec_stubs.c)
+    if [ "$dll_name" = "wined3d" ] && [ "${version%%.*}" -ge 9 ]; then
+        sed -i '/^vkd3d_/d' "$def_file"
     fi
 
     # Add wine9x custom exports for wined3d
@@ -422,6 +424,23 @@ setup_cflags() {
         xargs -I{} sed -i '/#include "wined3d_private.h"/a\#include "wine/wglext.h"' {} 2>/dev/null || true
 
     local qmaj="${version%%.*}" qrest="${version#*.}"
+    # Wine >= 9 writes DirectDraw/D3D union members without names (it dropped
+    # NONAMELESSUNION); wine9x's mingw headers hard-code u1..u5/s. Use per-build
+    # copies with anonymous unions (wine9x-support itself stays untouched: the
+    # same run may build older versions), plus vkd3d's headers for wined3d.
+    local ver9_inc=() ver9_after=()
+    if [ "$qmaj" -ge 9 ]; then
+        mkdir -p "$wine_src/.mingw-anon"
+        for h in ddraw.h d3dtypes.h d3d8types.h; do
+            sed -E 's/\} u([0-9]*);/} DUMMYUNIONNAME\1;/; s/\} s([0-9]*);/} DUMMYSTRUCTNAME\1;/' \
+                "$WINE9X/mingw/$h" > "$wine_src/.mingw-anon/$h"
+        done
+        ver9_inc=(-I"$wine_src/.mingw-anon")
+        ver9_after=(-idirafter "$wine_src/libs/vkd3d/include")
+        # wined3d_pause yields with NtDelayExecution (timeout 0); Win98's ntdll lacks it
+        sed -i 's/NtDelayExecution(FALSE, &timeout);/{ (void)timeout; Sleep(0); }/' \
+            "$wine_src/dlls/wined3d/wined3d_private.h"
+    fi
     CFLAGS_LIST=(
         -DQEMU3DFX_WINE_MAJOR="$qmaj" -DQEMU3DFX_WINE_MINOR="${qrest%%.*}"
         -std=c99
@@ -461,6 +480,7 @@ setup_cflags() {
         -include stdint.h
 
         # Include paths — wine9x core, then wine9x wine/ and Wine stock as last resort
+        "${ver9_inc[@]}"
         -I"$WINE9X/mingw"
         -I"$WINE9X/include/wine"
         -I"$WINE9X/compact"
@@ -468,6 +488,7 @@ setup_cflags() {
         -I"$WINE9X/pthread9x/build"
         -idirafter "$WINE9X/include"
         -idirafter "$wine_src/include"
+        "${ver9_after[@]}"
     )
 
     # VBOX patches
@@ -847,6 +868,12 @@ build_version() {
     local wined3d_objs="$build_dir/wined3d"
     if compile_dll wined3d "$wine_src" "$wined3d_objs"; then
         compile_compat "$wined3d_objs"
+        if [ "${version%%.*}" -ge 9 ]; then
+            # Wine >= 9 calls vkd3d-shader only for D3D10+ shaders, Vulkan and
+            # debug disassembly: stubs instead of the library
+            echo "  CC vkd3d_stubs.c"
+            $CC "${CFLAGS_LIST[@]}" -c -o "$wined3d_objs/_vkd3d_stubs.o" "$SCRIPT_DIR/docker/vkd3d_stubs.c"
+        fi
         link_wined3d "$wined3d_objs" "$build_dir/wined3d.dll" "$build_dir/wined3d.def"
         cp "$build_dir/wined3d.dll" "$outdir/"
         echo "  Built wined3d.dll ($(stat -f%z "$outdir/wined3d.dll" 2>/dev/null || stat -c%s "$outdir/wined3d.dll") bytes)"
