@@ -96,12 +96,40 @@ int __ms_vsnprintf(char *buf, unsigned int size, const char *fmt, va_list ap)
  * pthread9x's memory.o into wined3d, whose malloc/realloc/free replace
  * msvcrt's - and msvcrt's _msize on such a block returns garbage (the zeroing
  * then corrupted wined3d's arrays: a crash freeing a query in 3DMark2000).
- * memory.o exports _msize_int; the weak reference is null without it. */
+ * memory.o's own _msize_int is used where it is linked in (the weak
+ * reference is null without it). */
 size_t _msize_int(void *) __attribute__((weak));
+
+/* Without memory.o in this DLL, realloc and _msize are imports - and the link
+ * may resolve them from different DLLs: the CI's ddraw got realloc from msvcrt
+ * but _msize from wined3d, which exports pthread9x's allocator (3DMark2000
+ * then died with "abnormal program termination" on Wine 11). So take _msize
+ * from whichever module supplies the realloc called below. */
+static size_t block_size(void *p)
+{
+    static size_t (__cdecl *msize_fn)(void *);
+
+    if (_msize_int)
+        return _msize_int(p);
+    if (!msize_fn)
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        const unsigned char *fn = (const unsigned char *)&realloc;
+        /* &realloc may be this DLL's import thunk, jmp [__imp__realloc]:
+         * follow it to the function itself. */
+        if (fn[0] == 0xff && fn[1] == 0x25)
+            fn = **(const unsigned char * const * const *)(fn + 2);
+        if (VirtualQuery(fn, &mbi, sizeof(mbi)) && mbi.AllocationBase)
+            msize_fn = (size_t (__cdecl *)(void *))GetProcAddress((HMODULE)mbi.AllocationBase, "_msize");
+        if (!msize_fn)
+            msize_fn = _msize;
+    }
+    return msize_fn(p);
+}
 
 void *__cdecl compat_recalloc(void *p, size_t num, size_t size)
 {
-    size_t old = p ? (_msize_int ? _msize_int(p) : _msize(p)) : 0, new_size;
+    size_t old = p ? block_size(p) : 0, new_size;
     void *q;
 
     if (size && num > (size_t)-1 / size)
