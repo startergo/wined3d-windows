@@ -1,0 +1,7 @@
+anthropic>=0.25.0
+pefile>=2023.2.7
+
+# Native PE tools (install via Homebrew on macOS):
+#   brew install mingw-w64
+# This provides: i686-w64-mingw32-objdump, i686-w64-mingw32-nm, etc.
+# The inspector uses pefile as primary, objdump as fallback/supplement.

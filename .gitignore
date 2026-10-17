@@ -36,6 +36,10 @@ tools/glprof/glprof.c
 tools/glprof/glprof.def
 tools/glprof/stubs.s
 tools/glprof/opengl32.dll
-agents/
+# Python caches; .env files (where API keys would go) never enter the repository
+__pycache__/
+*.pyc
+.env
+*.env
 vc6/
 .DS_Store
