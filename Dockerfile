@@ -157,6 +157,8 @@ RUN set -ex && \
     true "=== Copy Wine headers needed by ddraw/d3d8/d3d9 ===" && \
     cp /tmp/wine-${WINE_VERSION}/include/wine/exception.h /build/include/wine/ 2>/dev/null || true && \
     sed -i 's/frame->Prev/frame->prev/g; s/(frame->Prev)/(frame->prev)/g' /build/include/wine/exception.h && \
+    true "Wine >= 11's d3d9 includes d3d9on12.h, which Wine generates from IDL: hand-written equivalent" && \
+    if [ "$WINE_MAJ" -ge 11 ]; then cp /docker/d3d9on12.h /build/include/d3d9on12.h; fi && \
     true "Wine >= 10's exception.h includes rtlsupportapi.h (not in MinGW); what it needs (RtlUnwind etc.) comes from MinGW's winnt.h - placeholder" && \
     if [ -f /tmp/wine-${WINE_VERSION}/include/rtlsupportapi.h ] && [ ! -f /build/include/rtlsupportapi.h ]; then \
       echo '/* placeholder: MinGW winnt.h declares RtlUnwind and friends */' > /build/include/rtlsupportapi.h; \
@@ -248,8 +250,13 @@ RUN set -ex && \
       sed -i 's/NtDelayExecution(FALSE, &timeout);/{ (void)timeout; Sleep(0); }/' /build/wined3d/wined3d_private.h; \
       grep -q 'NtDelayExecution' /build/wined3d/wined3d_private.h && { echo "NtDelayExecution substitution failed"; exit 1; } || true; \
     fi && \
+    true "=== Wine >= 11: wined3d_private.h includes <intrin.h>, which clashes with stdlib.h in MinGW (_byteswap_ulong); wined3d only uses __popcnt ===" && \
+    if [ "$WINE_MAJ" -ge 11 ]; then \
+      sed -i 's|^#include <intrin.h>$|#define __popcnt(x) __builtin_popcount(x)  /* Win98 build: no <intrin.h> (MinGW stdlib.h clash) */|' /build/wined3d/wined3d_private.h; \
+    fi && \
     true "=== Remove vkd3d (Wine 8.0+ Vulkan D3D, not needed for Win98) ===" && \
     sed -i '/#include <vkd3d.h>/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
+    sed -i '/#include <vkd3d_utils.h>/d; /vkd3d_utils_set_log_callback/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
     sed -i '/WINE_DECLARE_DEBUG_CHANNEL(vkd3d)/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
     perl -0777 -pi -e 's/static void vkd3d_log_callback\(.*?\n\}/static void vkd3d_log_callback(void) { }/s' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
     sed -i '/vkd3d_set_log_callback/d' /build/wined3d/wined3d_main.c 2>/dev/null || true && \
@@ -307,6 +314,8 @@ RUN set -ex && \
         grep -v -E 'wined3d_get_adapter_monitor|wined3d_surface_is_lost|wined3d_surface_restore' >> /build/wined3d/wined3d.def && \
     true "Wine >= 9: drop wined3d's vkd3d re-exports (for D3D10-12 DLLs, which Win98 lacks; only the shader functions are stubbed, for wined3d's own use)" && \
     if [ "$WINE_MAJ" -ge 9 ]; then sed -i '/^  vkd3d_/d' /build/wined3d/wined3d.def; fi && \
+    true "Wine >= 11: wined3d's D3D11 video decoder API (decoder.c not built)" && \
+    if [ "$WINE_MAJ" -ge 11 ]; then sed -i '/^  wined3d_decoder_[a-z_]*$/d' /build/wined3d/wined3d.def; fi && \
     printf '  wined3d_surface_ddheap\n' >> /build/wined3d/wined3d.def && \
     if [ "$WINE_MAJ" -eq 7 ]; then \
       printf '  wined3d_streaming_buffer_map\n  wined3d_streaming_buffer_unmap\n  wined3d_streaming_buffer_upload\n' >> /build/wined3d/wined3d.def; \
@@ -331,6 +340,9 @@ RUN set -ex && \
     true "Wine >= 10 splits the fixed-function code into ffp_gl.c (GL state) and ffp_hlsl.c (opt-in HLSL pipeline)" && \
     [ -f wined3d/ffp_gl.c ] && echo "wined3d_OBJS += wined3d/ffp_gl.c.o" >> Makefile || true && \
     [ -f wined3d/ffp_hlsl.c ] && echo "wined3d_OBJS += wined3d/ffp_hlsl.c.o" >> Makefile || true && \
+    true "Wine >= 11 moves the GL texture code into texture_gl.c (decoder.c, the D3D11 video decoding API, is not built: Win98 has no D3D11)" && \
+    [ -f wined3d/texture_gl.c ] && echo "wined3d_OBJS += wined3d/texture_gl.c.o" >> Makefile || true && \
+    if [ "$WINE_MAJ" -ge 11 ]; then cp /docker/wine11_stubs.c wined3d/wine11_stubs.c && echo "wined3d_OBJS += wined3d/wine11_stubs.c.o" >> Makefile; fi && \
     [ -f wined3d/adapter_vk.c ] && echo "wined3d_OBJS += wined3d/adapter_vk.c.o" >> Makefile || true && \
     [ -f wined3d/context_vk.c ] && echo "wined3d_OBJS += wined3d/context_vk.c.o" >> Makefile || true && \
     [ -f wined3d/shader_spirv.c ] && echo "wined3d_OBJS += wined3d/shader_spirv.c.o" >> Makefile || true && \
@@ -401,6 +413,8 @@ RUN set -ex && \
     [ -f wined3d/context_gl.c ] && make wined3d/context_gl.c.o || true && \
     [ -f wined3d/ffp_gl.c ] && make wined3d/ffp_gl.c.o || true && \
     [ -f wined3d/ffp_hlsl.c ] && make wined3d/ffp_hlsl.c.o || true && \
+    [ -f wined3d/texture_gl.c ] && make wined3d/texture_gl.c.o || true && \
+    [ -f wined3d/wine11_stubs.c ] && make wined3d/wine11_stubs.c.o || true && \
     [ -f wined3d/adapter_vk.c ] && make wined3d/adapter_vk.c.o || true && \
     [ -f wined3d/context_vk.c ] && make wined3d/context_vk.c.o || true && \
     [ -f wined3d/shader_spirv.c ] && make wined3d/shader_spirv.c.o || true && \

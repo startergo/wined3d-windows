@@ -16,6 +16,7 @@ VERSIONS=(
     "8.0.2:8.0:tar.xz:0:modern"
     "9.0.1:9.0:tar.xz:0:modern"
     "10.0:10.0:tar.xz:0:modern"
+    "11.0:11.0:tar.xz:0:modern"
 )
 
 FORCE=0

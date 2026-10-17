@@ -23,6 +23,7 @@ VERSIONS=(
     "8.0.2:8.0:tar.xz"
     "9.0.1:9.0:tar.xz"
     "10.0:10.0:tar.xz"
+    "11.0:11.0:tar.xz"
 )
 
 FORCE=0
@@ -236,6 +237,10 @@ generate_def() {
     if [ "$dll_name" = "wined3d" ] && [ "${version%%.*}" -ge 9 ]; then
         sed -i '/^vkd3d_/d' "$def_file"
     fi
+    # Wine >= 11: the D3D11 video decoder API (decoder.c is not built)
+    if [ "$dll_name" = "wined3d" ] && [ "${version%%.*}" -ge 11 ]; then
+        sed -i '/^wined3d_decoder_/d' "$def_file"
+    fi
 
     # Add wine9x custom exports for wined3d
     if [ "$dll_name" = "wined3d" ]; then
@@ -291,7 +296,7 @@ generate_def() {
 # ── Detect source files ────────────────────────────────────────────
 detect_sources() {
     local src_dir="$1"
-    find "$src_dir" -maxdepth 1 -name '*.c' -exec basename {} \; | grep -v '_vk\.c' | grep -v 'shader_spirv\.c' | sort -u
+    find "$src_dir" -maxdepth 1 -name '*.c' -exec basename {} \; | grep -v '_vk\.c' | grep -v 'shader_spirv\.c' | grep -v '^decoder\.c$' | sort -u
 }
 
 # ── Common CFLAGS ──────────────────────────────────────────────────
@@ -358,6 +363,7 @@ setup_cflags() {
         sed -i '/WINE_DECLARE_DEBUG_CHANNEL(vkd3d)/d' "$wine_src/dlls/wined3d/wined3d_main.c" 2>/dev/null || true
         perl -0777 -pi -e 's/static void vkd3d_log_callback\(.*?\n\}/static void vkd3d_log_callback(void) { }/s' "$wine_src/dlls/wined3d/wined3d_main.c" 2>/dev/null || true
         sed -i '/vkd3d_set_log_callback/d' "$wine_src/dlls/wined3d/wined3d_main.c" 2>/dev/null || true
+        sed -i '/#include <vkd3d_utils.h>/d; /vkd3d_utils_set_log_callback/d' "$wine_src/dlls/wined3d/wined3d_main.c" 2>/dev/null || true
         sed -i '/VKD3D_DEBUG/d; /VKD3D_SHADER_DEBUG/d; /TRACE_ON(vkd3d)/d; /WARN_ON(vkd3d)/d; /FIXME_ON(vkd3d)/d; /ERR_ON(vkd3d)/d' "$wine_src/dlls/wined3d/wined3d_main.c" 2>/dev/null || true
     fi
 
@@ -446,6 +452,13 @@ setup_cflags() {
         done
         # Wine >= 10's exception.h includes rtlsupportapi.h (not in MinGW; what
         # it needs comes from MinGW's winnt.h)
+        if [ "$qmaj" -ge 11 ]; then
+            # d3d9 includes d3d9on12.h, which Wine generates from IDL
+            cp "$SCRIPT_DIR/docker/d3d9on12.h" "$wine_src/.mingw-anon/d3d9on12.h"
+            # <intrin.h> clashes with MinGW's stdlib.h (_byteswap_ulong); only __popcnt is used
+            sed -i 's|^#include <intrin.h>$|#define __popcnt(x) __builtin_popcount(x)  /* Win98 build: no <intrin.h> */|' \
+                "$wine_src/dlls/wined3d/wined3d_private.h"
+        fi
         if [ -f "$wine_src/include/rtlsupportapi.h" ]; then
             echo '/* placeholder: MinGW winnt.h declares RtlUnwind and friends */' > "$wine_src/.mingw-anon/rtlsupportapi.h"
         fi
@@ -832,6 +845,10 @@ build_version() {
 
     # ── Copy extra source files into Wine tree ──
     cp "$SCRIPT_DIR/docker/d3dkmt_stubs.c" "$wine_src/dlls/wined3d/d3dkmt_stubs.c" 2>/dev/null || true
+    # Wine >= 11: stubs for the decoder/Vulkan symbols shared code references
+    if [ "${version%%.*}" -ge 11 ]; then
+        cp "$SCRIPT_DIR/docker/wine11_stubs.c" "$wine_src/dlls/wined3d/wine11_stubs.c"
+    fi
     cp "$SCRIPT_DIR/qemu3dfx_hooks.c" "$wine_src/dlls/wined3d/qemu3dfx_hooks.c" 2>/dev/null || true
     cp "$SCRIPT_DIR/qemu3dfx_ddraw_hooks.c" "$wine_src/dlls/ddraw/qemu3dfx_ddraw_hooks.c" 2>/dev/null || true
     cp "$SCRIPT_DIR/qemu3dfx_ddthru.c" "$wine_src/dlls/ddraw/qemu3dfx_ddthru.c"

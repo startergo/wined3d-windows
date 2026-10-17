@@ -95,6 +95,7 @@ ZBUFFER_DEPTHS = (
 PRELUDE = {
     'ddraw.c': ENUM_EMULATION + ZBUFFER_DEPTHS,
     'texture.c': ON_SWAPCHAIN,
+    'texture_gl.c': ON_SWAPCHAIN,   # Wine 11 moved the GL texture code here
     'context_gl.c': ON_SWAPCHAIN +
         '\n'
         'static inline BOOL qemu3dfx_latch1_on_swapchain(void)\n'
@@ -983,6 +984,15 @@ def main():
         path = os.path.join(build, fname) if '/' in fname else os.path.join(build, 'wined3d', fname)
         src = files.get(path) or open(path).read()
         span = function_span(src, func_re)
+        if not span:
+            # Wine keeps splitting GL code into <file>_gl.c (adapter_gl.c,
+            # context_gl.c; texture_gl.c in Wine 11): look there too.
+            alt = path[:-2] + '_gl.c'
+            if os.path.exists(alt):
+                alt_src = files.get(alt) or open(alt).read()
+                if function_span(alt_src, func_re):
+                    path, src = alt, alt_src
+                    span = function_span(src, func_re)
         if not span:
             failed.append('%s: function /%s/ not found' % (fname, func_re)); continue
         if where == 'body':

@@ -35,6 +35,7 @@ Win98 loading.
 | 8.0.2 | D | 30 | +context_gl.c, context_vk.c, shader_spirv.c |
 | 9.0.1 | E | 30 | Same files as 8.0.2; needs vkd3d-shader headers (library stubbed) |
 | 10.0 | F | 29 | +ffp_gl.c, ffp_hlsl.c (fixed-function code split out) |
+| 11.0 | G | 32 | +texture_gl.c (GL texture code split out), texture_vk.c, decoder.c (not built) |
 
 The Vulkan sources (`adapter_vk.c`, `context_vk.c`, `shader_spirv.c`) are
 never linked — Win98 has no Vulkan; `docker/vk_stubs.c` provides their entry
@@ -110,7 +111,7 @@ What the call sites do, by setting:
 | `BlitFpsLimit` / `FlipFpsLimit` | frame limiter in `Unlock` / `Flip` (Flip: Wine ≤ 3.x) |
 | `DDSurfaceHeap` | released surfaces keep a zeroed stub instead of being freed (6.0+) |
 
-Call sites are in place in wined3d and ddraw for every version, 1.8.7–10.0.
+Call sites are in place in wined3d and ddraw for every version, 1.8.7–11.0.
 qemu-3dfx's references end at 8.0.2, so 9.0.1 reuses 8.0.2's call sites (all
 43 anchors match; `DDSurfaceHeap` uses `calloc`/`free` there, like Wine 9's
 ddraw) and is validated in the VM only, not against a reference binary.
@@ -118,6 +119,8 @@ ddraw) and is validated in the VM only, not against a reference binary.
 function (its fixed-function blitter forwards to the GLSL blitter, whose
 `draw_shaded_quad` carries the same ScaleWindow sites). Wine 10 also lowered
 `dwMaxVertexCount` to 2048; 10.x reports 65536 like the reference and Wine ≤ 9.
+11.0 uses the same 42 sites; the texture ones now land in `texture_gl.c` (the
+patcher looks in a file's `_gl.c` counterpart when a function has moved).
 
 Two additions act regardless of settings:
 
@@ -202,6 +205,7 @@ docker rm extract
 | D | 6.0.4, 7.0.2, 8.0.2 | 6.0, 7.0, 8.0 | tar.xz |
 | E | 9.0.1 | 9.0 | tar.xz |
 | F | 10.0 | 10.0 | tar.xz |
+| G | 11.0 | 11.0 | tar.xz |
 
 ### CI / MSYS2 (`build-ci.sh`)
 
@@ -254,6 +258,7 @@ output/
 | AllocateLocallyUniqueId fails on Win98 | Time-based LUID fallback (the pattern also covers 5.0's `wined3d_output_cleanup()` call, without which 5.0.5 could not create an adapter) |
 | Wine ≥ 9 (vkd3d-shader, `NtDelayExecution`, nameless unions) | wined3d calls vkd3d-shader only for Direct3D 10+ shaders, the Vulkan backend and debug disassembly: `docker/vkd3d_stubs.c` stands in for the library and wined3d's vkd3d re-exports are dropped. `wined3d_pause`'s `NtDelayExecution` (timeout 0, missing from Win98's ntdll) becomes `Sleep(0)`. Wine 9 writes DirectDraw/D3D union members without names, so wine9x's MinGW headers get anonymous unions for 9.x builds |
 | Wine ≥ 10 | `wined3d_vk.h` needs newer Vulkan declarations: Wine's own `wine/vulkan.h` (Docker; the CI already uses it). The new `ffp_gl.c`/`ffp_hlsl.c` are built (the HLSL fixed-function pipeline and the vkd3d GLSL backend are opt-in settings, so the vkd3d stubs still suffice). `exception.h` includes `rtlsupportapi.h`: an empty placeholder (MinGW's `winnt.h` has what it needs). New imports Win98 lacks get small implementations: `_recalloc` (msvcrt; `realloc` + zeroing, with the block size from the allocator that owns it: pthread9x's `_msize_int` where its `memory.o` is linked, as in the CI, else msvcrt's `_msize`), `GetModuleHandleExA` (`VirtualQuery` for `FROM_ADDRESS`) and `InitializeCriticalSectionEx` (→ `InitializeCriticalSection`) |
+| Wine ≥ 11 | `texture_gl.c` is built; `decoder.c` (the Direct3D 11 video decoding API) and `texture_vk.c` are not, and `docker/wine11_stubs.c` covers the few of their symbols shared code references (those paths need a D3D11 decoder or a Vulkan adapter). wined3d's decoder exports are dropped. `<intrin.h>` (which clashes with MinGW's `stdlib.h` over `_byteswap_ulong`) becomes a `__popcnt` macro, the only intrinsic used. `vkd3d_utils.h` and its log callback are removed. d3d9's `d3d9on12.h`, generated from IDL in Wine, is supplied hand-written (`docker/d3d9on12.h`). `D3DKMTEscape` (a Wine-only present-rect escape) is stubbed |
 | Wine ≤ 3.0 defines globals in headers (`glEnableWINE`/`glDisableWINE` in `wined3d_gl.h`) | Built with `-fcommon` (GCC ≥ 10 defaults to `-fno-common`, giving each file a private, never-set copy: 3DMark2000 crashed in `context_apply_blit_state`'s `glDisableWINE(GL_FOG)`) |
 | Wine 1.8 uses `GL_APPLE_client_storage`, which the passthrough reports from the macOS host | Disabled for 1.8 (backport of Wine 1.9.1's removal): the host read texture data from guest memory, garbling surfaces rewritten every frame (3DMark2000's helicopter HUD, also with the reference DLLs) |
 | Wine 1.9 never loads `p_wglGetPixelFormat` in its `USE_WIN32_OPENGL` mode | Loaded next to `wglSwapBuffers`, as in 1.8 and 2.0+ (crashed every context creation) |
@@ -329,13 +334,15 @@ DLLs:
   output identical to their reference and exit cleanly.
 - 3DMark 99 Max completes with the 6.0.4 build (2726; reference 2612), and
   3DMark2000 with every version (1.8.7 3272, 1.9.7 4016, 2.0.5 3902,
-  3.0.5 4216, 4.12.1 4656, 6.0.4 4357, 8.0.2 4090, 9.0.1 3712, 10.0 2505;
-  references 4195 for 2.0.5 and 3899 for 6.0.4, all in the same VM). The
-  capsdump output of 9.0.1 and 10.0 is identical to the 8.0.2 reference.
-- Newer Wine versions score lower under CPU emulation: their wined3d does
-  more CPU work per draw, which an emulated guest feels directly. 4.12.1–8.0.2
-  are the fastest choices there; 9.0.1 and 10.0 are for titles that need
-  newer Wine fixes.
+  3.0.5 4216, 4.12.1 4656, 6.0.4 4357, 8.0.2 4090, 9.0.1 3712, 10.0 2505,
+  11.0 3379; references 4195 for 2.0.5 and 3899 for 6.0.4, all in the same
+  VM). The capsdump output of 9.0.1 and 10.0 is identical to the 8.0.2
+  reference; 11.0's differs only in `dwNumFourCCCodes` (10 instead of 9 - one
+  more FourCC surface format in Wine 11).
+- Newer Wine versions generally score lower under CPU emulation: their
+  wined3d does more CPU work per draw, which an emulated guest feels
+  directly. 4.12.1–8.0.2 are the fastest choices there; 9.0.1–11.0 are for
+  titles that need newer Wine fixes (11.0 recovers much of 10.0's drop).
 - `tools/glprof` (an `opengl32.dll` proxy in front of the qemu-3dfx wrapper)
   counts GL calls per frame; diffing the reference's and ours located the
   empty-`vsnprintf` bug.

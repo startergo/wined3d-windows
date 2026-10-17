@@ -290,3 +290,10 @@ NTSTATUS __stdcall D3DKMTQueryVideoMemoryInfo(void *desc)
 {
     return STATUS_NOT_IMPLEMENTED;
 }
+
+/* Wine >= 11: wined3d sends D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE, a message for
+ * Wine's own display drivers; meaningless on Windows. Not implemented. */
+NTSTATUS __stdcall D3DKMTEscape(const void *desc)
+{
+    return STATUS_NOT_IMPLEMENTED;
+}

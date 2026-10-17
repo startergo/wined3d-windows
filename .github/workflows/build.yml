@@ -77,6 +77,10 @@ jobs:
             wine_branch: "10.0"
             wine_ext: "tar.xz"
             build_msvcrt: "0"
+          - wine_version: "11.0"
+            wine_branch: "11.0"
+            wine_ext: "tar.xz"
+            build_msvcrt: "0"
 
     name: Wine ${{ matrix.wine_version }}
 
@@ -237,7 +241,7 @@ jobs:
           TITLE="Wine D3D DLLs $(date '+%Y-%m-%d')"
           gh release create "$TAG" wine-d3d-dlls.tar.gz \
             --title "$TITLE" \
-            --notes "Wine D3D DLLs built from source for all supported versions (1.8.7–10.0).
+            --notes "Wine D3D DLLs built from source for all supported versions (1.8.7–11.0).
 
           Includes: wined3d.dll, d3d9.dll, d3d8.dll, ddraw.dll per version.
           All DLLs link against Win98's own msvcrt.dll (no ucrtbase.dll dependency)."
