@@ -7,7 +7,8 @@ host. TRACE stays compiled out (far too verbose under emulation).
 
   - Makefile: drop -DWINE_SILENT and -DWINE_NO_DEBUG_MSGS (keep NO_TRACE)
   - compact/debug.c: default_dbg_vprintf formats the message and writes it
-    to COM1, opening the port per message so all four DLLs can share it
+    to COM1, opening the port per message so all four DLLs can share it;
+    headers read "class:channel:function" (e.g. warn:ddraw:d3d_device_init)
 """
 import os, re, sys
 
@@ -23,6 +24,14 @@ open(mk, 'w').write(s2)
 dc = os.path.join(build, 'compact', 'debug.c')
 s = open(dc).read()
 s = s.replace('#define LOG_FILE', '/* LOG_FILE off: messages go to COM1 */', 1)
+# Header "class:channel:function": the formatter in use does not know the '#'
+# flag, so "[%#x]" printed literally without consuming its argument and every
+# later field shifted ("err:[%#x]:(null):ddraw", function name lost). The
+# thread id is 0 on Win9x anyway (patched in the Dockerfile), so drop it.
+s, n = re.subn(r'wine_dbg_printf\( "%s:\[%#x\]:%s:%s ", debug_classes\[cls\], (?:0|GetCurrentThreadId\(\)), channel->name, func \)',
+               'wine_dbg_printf( "%s:%s:%s ", debug_classes[cls], channel->name, func )', s)
+if n != 1:
+    sys.exit('debug_serial: message header not found')
 m = re.search(r'static int default_dbg_vprintf\( const char \*format, va_list args \)\n\{.*?\n\}\n', s, re.S)
 if not m:
     sys.exit('debug_serial: default_dbg_vprintf not found')
