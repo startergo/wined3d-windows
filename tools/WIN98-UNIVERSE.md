@@ -53,7 +53,7 @@ Unlike 10.6.8, **Win98 installs are not identical**. The 10.6 universe is
 the same on every 10.6.8 box; a Win98 universe is the union of 98SE plus
 whatever DirectX/IE/WMP/runtime redistributables and wrappers that machine
 has. Current file: the qemu-3dfx VM disk
-(`qemu-3dfx-3-2/win98/win98.qcow2`), scanned 2026-10-13:
+(`win98/win98.qcow2` in the qemu-3dfx Win98 package), scanned 2026-10-13:
 
 - Core OS: stock **Windows 98 SE** — KERNEL32 4.10.2222, USER32 4.10.2231,
   GDI32 4.10.1998, ADVAPI32 4.80.1675, MSVCRT 6.0.8397.
@@ -83,7 +83,7 @@ Consequences:
 
 From the VM disk (VM shut down; the image is only read):
 
-    tools/win98-universe.sh ~/Downloads/qemu-3dfx-3-2/win98/win98.qcow2
+    tools/win98-universe.sh "$WIN98_IMAGE"   # path to your win98.qcow2
 
 From any other Win98 image or an extracted `WINDOWS` folder:
 
