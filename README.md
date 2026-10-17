@@ -339,6 +339,15 @@ DLLs:
   VM). The capsdump output of 9.0.1 and 10.0 is identical to the 8.0.2
   reference; 11.0's differs only in `dwNumFourCCCodes` (10 instead of 9 - one
   more FourCC surface format in Wine 11).
+- qemu-3dfx's `wrapgl32.ext` (read from the program's folder): crag-hack's
+  wine9x builds ship `ContextVsyncOff,1`, plus `BufOAccelEN,1` for 9.x-11.x.
+  On a macOS host neither helps: 3DMark2000 with 11.0 scored 3392 with both
+  and 3175 with vsync off only (3379 without the file), 6.0.4 4036 with vsync
+  off (4357 without) - within run-to-run spread. `BufOAccelEN` cannot take
+  effect there (qemu-3dfx needs Apple's legacy GL 2.1 context; faster buffer
+  mapping needs GL 4.4's ARB_buffer_storage, and the log stays at
+  `MappedBufferObject One-copy`). It may help on Windows/Linux hosts with a
+  modern GL. crag-hack's 11.0 build with the same file scored 3295.
 - Newer Wine versions generally score lower under CPU emulation: their
   wined3d does more CPU work per draw, which an emulated guest feels
   directly. 4.12.1–8.0.2 are the fastest choices there; 9.0.1–11.0 are for
