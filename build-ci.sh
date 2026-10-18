@@ -659,6 +659,10 @@ compile_compat() {
     # which doesn't exist in Win98's VC6-era MSVCRT.DLL)
     echo "  CC copysign.c"
     $CC "${CFLAGS_LIST[@]}" -c -o "$obj_dir/_copysign.o" "$SCRIPT_DIR/docker/copysign.c" 2>&1 || true
+    # Windows 95: multi-monitor API + GetCursorInfo wrappers for wined3d (plain MinGW headers)
+    case "$(basename "$obj_dir")" in wined3d)
+        $CC -std=gnu99 -O2 -c -o "$obj_dir/_user32_compat.o" "$SCRIPT_DIR/docker/user32_compat.c" ;;
+    esac
 
     # Compile custom CRT entry point. With -nodefaultlibs, MinGW's standard CRT
     # (libmingw32/libmingwex) is not linked, so we must provide our own DllMainCRTStartup.
