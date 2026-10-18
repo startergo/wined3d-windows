@@ -334,7 +334,7 @@ RUN set -ex && \
     printf '  DebugSetLevel\n  PSGPError\n  PSGPSampleTexture\n' >> /build/d3d9/d3d9.def && \
     \
     echo "=== Inject qemu-3dfx + compat objects into Makefile ===" && \
-    echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/user32_compat.o /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
+    echo "wined3d_OBJS += wined3d/qemu3dfx_hooks.c.o /build/kernel32_compat.o /build/copysign.o /build/wine_spec_stubs.o" >> Makefile && \
     [ -f wined3d/adapter_gl.c ] && echo "wined3d_OBJS += wined3d/adapter_gl.c.o" >> Makefile || true && \
     [ -f wined3d/context_gl.c ] && echo "wined3d_OBJS += wined3d/context_gl.c.o" >> Makefile || true && \
     true "Wine >= 10 splits the fixed-function code into ffp_gl.c (GL state) and ffp_hlsl.c (opt-in HLSL pipeline)" && \
@@ -372,8 +372,6 @@ RUN set -ex && \
     CFLAGS_COMPAT="-std=c99 -O3 -fomit-frame-pointer -I/docker -Iinclude -Iinclude/wine -Imingw -Icompact -Ipthread9x/include -D_WIN32 -DWIN32 -D__WINESRC__ -DUSE_WIN32_OPENGL -DWINE_NOWINSOCK -DNDEBUG -DWINVER=0x0400 -DWINE_SILENT -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS -DDECLSPEC_HIDDEN= -D__USE_MINGW_ANSI_STDIO=0" && \
     CFLAGS_HOOKS="-std=c99 -O3 -fomit-frame-pointer -D_WIN32 -DWIN32 -DNDEBUG -DWINVER=0x0400 -D__USE_MINGW_ANSI_STDIO=0 -DQEMU3DFX_WINE_MAJOR=${WINE_MAJ} -DQEMU3DFX_WINE_MINOR=${WINE_MIN}" && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/kernel32_compat.o /docker/kernel32_compat.c && \
-    true "Windows 95: multi-monitor API + GetCursorInfo wrappers for wined3d (plain MinGW headers)" && \
-    i686-w64-mingw32-gcc -std=gnu99 -O2 -c -o /build/user32_compat.o /docker/user32_compat.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/copysign.o /docker/copysign.c && \
     i686-w64-mingw32-gcc $CFLAGS_COMPAT -c -o /build/vk_stubs.o /docker/vk_stubs.c && \
     if [ "$WINE_MAJ" -ge 9 ] && [ -f /build/include/vkd3d_shader.h ]; then i686-w64-mingw32-gcc $CFLAGS_COMPAT -I/build/include -c -o /build/vkd3d_stubs.o /docker/vkd3d_stubs.c; fi && \
